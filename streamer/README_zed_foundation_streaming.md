@@ -47,8 +47,9 @@ two calls sequentially before merging the clouds.
 | `TRT_BENCHMARK.md` | Hardware, methodology, results, and conclusions |
 | `TRT_BENCHMARK_RESULTS.json` | Machine-readable results for every case |
 | `TRT_RESOLUTION_BENCHMARK_RESULTS.json` | One/two-camera capture-resolution sweep |
+| `TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json` | One/two-camera 30k resolution sweep |
 | `sample_one_zed_15000.ply` | Example 15,000-point RGB cloud |
-| `pointcloud_samples/*.ply` | One raw 15,000-point sample per ZED capture resolution |
+| `pointcloud_samples/` | Interactive viewer, RGB references, and 15k/30k PLY samples |
 
 ## Requirements
 
@@ -116,7 +117,9 @@ python streamer/Streamer_real_one_cam.py \
 ```
 
 Press `Ctrl+C` to stop it. Segmentation, voxel filtering, and bounding-box
-filtering are disabled. The one-camera transform is the 4x4 identity matrix.
+filtering are disabled. Output X is reflected by default to match the verified
+real-world/legacy VR convention; use `--no-flip-x` only for raw ZED optical
+coordinates.
 
 ### Select a specific camera
 
@@ -158,9 +161,10 @@ python streamer/view_point_cloud.py live \
 For a viewer on another computer, replace `127.0.0.1` with the streamer's IP
 address and allow TCP port 5555 through the firewall.
 
-### Save one cloud to a PLY file
+### Save one cloud and its matching RGB image
 
-This saves the first processed cloud and continues streaming:
+This saves the processed cloud and camera 1's native-resolution rectified left
+image from the same frame, then continues streaming:
 
 ```bash
 python streamer/Streamer_real_one_cam.py \
@@ -168,7 +172,8 @@ python streamer/Streamer_real_one_cam.py \
   --resolution VGA \
   --camera-fps 100 \
   --max-points 15000 \
-  --save-first-cloud output_clouds/one_camera.ply
+  --save-first-cloud output_clouds/one_camera.ply \
+  --save-first-rgb output_clouds/one_camera_rgb.png
 ```
 
 Open the saved cloud with:
@@ -260,9 +265,10 @@ python streamer/Streamer_real_one_cam.py \
   --bbox-max  0.5  0.5 2.0
 ```
 
-With an identity transform, X points right, Y points down, and Z points forward
-from the rectified left camera. With camera transforms, the box is evaluated in
-the merged output frame.
+In raw ZED optical coordinates, X points right, Y points down, and Z points
+forward. Because the default output reflects X, default bounding-box X is the
+verified real-world/VR X direction. With camera transforms, the box is evaluated
+in the final merged and reflected output frame.
 
 Disable it by omitting the option or explicitly using:
 
@@ -348,14 +354,21 @@ preserve the same near-depth range; that further increases memory and latency.
 The viewer shows a coordinate frame by default: **X is red, Y is green, and Z
 is blue**. Use `--axis-size` to change its size in metres.
 
-Four raw camera-frame samples are included:
+[Open the interactive browser viewer](https://htmlpreview.github.io/?https://raw.githubusercontent.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/pointcloud_samples/index.html).
+It switches between every 15k/30k colored PLY, shows the native RGB reference
+captured with each 30k cloud, and supports mouse orbit, pan, zoom, point sizing,
+and view reset. Each 15k file is a separate capture of the same scene.
+The [sample README](pointcloud_samples/README.md) also renders the four RGB
+references directly on GitHub.
 
-| ZED capture mode | Saved point cloud |
-|---|---|
-| VGA, 672x376 | `pointcloud_samples/one_zed_vga_15000.ply` |
-| HD720, 1280x720 | `pointcloud_samples/one_zed_hd720_15000.ply` |
-| HD1080, 1920x1080 | `pointcloud_samples/one_zed_hd1080_15000.ply` |
-| HD2K, 2208x1242 | `pointcloud_samples/one_zed_hd2k_15000.ply` |
+Corrected 15k and 30k samples are included:
+
+| ZED capture mode | RGB | Point clouds |
+|---|---|---|
+| VGA, 672x376 | `one_zed_vga_rgb.png` | `one_zed_vga_15000.ply`, `one_zed_vga_30000.ply` |
+| HD720, 1280x720 | `one_zed_hd720_rgb.png` | `one_zed_hd720_15000.ply`, `one_zed_hd720_30000.ply` |
+| HD1080, 1920x1080 | `one_zed_hd1080_rgb.png` | `one_zed_hd1080_15000.ply`, `one_zed_hd1080_30000.ply` |
+| HD2K, 2208x1242 | `one_zed_hd2k_rgb.png` | `one_zed_hd2k_15000.ply`, `one_zed_hd2k_30000.ply` |
 
 Open the HD1080 sample with a one-metre coordinate frame:
 
@@ -365,9 +378,10 @@ python streamer/view_point_cloud.py \
   --axis-size 1.0
 ```
 
-The raw ZED optical frame is `+X` right, `+Y` down, and `+Z` forward. The old
-VR publishing pipeline reflected X before transmission. To compare that legacy
-orientation without changing the PLY file, add the display-only option:
+The raw ZED optical frame is `+X` right, `+Y` down, and `+Z` forward. Testing
+confirmed that the real-world/legacy VR convention requires an X reflection,
+so new streams and samples apply it by default. To display raw ZED X without
+changing the PLY, reflect the already-corrected sample once in the viewer:
 
 ```bash
 python streamer/view_point_cloud.py \
@@ -376,20 +390,18 @@ python streamer/view_point_cloud.py \
   --flip-axis x
 ```
 
-For the actual VR stream, use the streamer's `--flip-x` option instead:
+The normal VR command needs no extra orientation flag:
 
 ```bash
 python streamer/Streamer_real_one_cam.py \
   --engine-dir output \
   --resolution HD1080 \
   --camera-fps 30 \
-  --max-points 15000 \
-  --flip-x
+  --max-points 15000
 ```
 
-`--flip-axis x` changes only the viewer display. `--flip-x` changes streamed
-and newly saved coordinates, and also makes bounding-box coordinates use the
-reflected output frame.
+Use `--no-flip-x` on the streamer only when raw ZED optical X is required.
+`--flip-axis x` is always display-only.
 
 Open the sample included in the repository:
 
@@ -428,12 +440,14 @@ allow the selected TCP port through the firewall.
 ## Save a point cloud
 
 `--save-first-cloud` writes the first processed cloud as a compact binary
-little-endian PLY and then continues streaming:
+little-endian PLY. `--save-first-rgb` writes camera 1's matching native RGB
+frame. Streaming then continues:
 
 ```bash
 python streamer/Streamer_real_one_cam.py \
   --serial <SERIAL> \
-  --save-first-cloud output_clouds/first_cloud.ply
+  --save-first-cloud output_clouds/first_cloud.ply \
+  --save-first-rgb output_clouds/first_cloud_rgb.png
 ```
 
 Coordinates are stored in metres and colors as 8-bit RGB.
@@ -476,6 +490,26 @@ bounding-box or voxel filter:
 The one-camera VGA result can vary between runs because this is a complete
 live-camera pipeline, not a TensorRT-only microbenchmark. See
 [`TRT_BENCHMARK.md`](TRT_BENCHMARK.md) for latency columns and interpretation.
+
+Run the 30k resolution and camera-count variations with:
+
+```bash
+python streamer/benchmark_zed_trt.py \
+  --serial <SERIAL_1> \
+  --serial <SERIAL_2> \
+  --engine-dir output \
+  --suite resolution-30k \
+  --frames 180 \
+  --warmup-runs 3 \
+  --output-json streamer/TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json
+```
+
+| Capture | One camera, 30k | Two cameras, 30k |
+|---|---:|---:|
+| VGA/100 | 71.34 FPS | 39.49 FPS |
+| HD720/60 | 59.97 FPS | 34.49 FPS |
+| HD1080/30 | 29.47 FPS | 29.27 FPS |
+| HD2K/15 | 15.09 FPS | 13.03 FPS |
 
 Each subprocess stops deterministically after `--benchmark-frames`, prints a
 `BENCHMARK_RESULT` JSON record, releases its camera, and starts the next case.
@@ -534,7 +568,9 @@ python streamer/Streamer_real_one_cam.py \
 | `--bbox-filter` | disabled | Enable the axis-aligned 3D box |
 | `--bbox-min X Y Z` | required when enabled | Minimum output-frame corner |
 | `--bbox-max X Y Z` | required when enabled | Maximum output-frame corner |
-| `--flip-x` | disabled | Reflect output X for the legacy VR coordinate convention |
+| `--flip-x` | enabled | Reflect output X for the verified real-world/VR convention |
+| `--no-flip-x` | — | Keep raw ZED optical X instead |
+| `--save-first-rgb PATH` | disabled | Save camera 1's matching native rectified RGB image |
 | `--remove-invisible` | enabled | Reject correspondences outside the right image |
 | `--random-seed` | 0 | Reproducible point sampling |
 

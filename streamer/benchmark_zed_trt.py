@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument(
         "--suite",
-        choices=("all", "resolution"),
+        choices=("all", "resolution", "resolution-30k"),
         default="all",
         help="Benchmark matrix to run (default: all)",
     )
@@ -54,20 +54,44 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_resolution_cases(include_two_camera: bool) -> list[BenchmarkCase]:
+def build_resolution_cases(
+    include_two_camera: bool,
+    max_points: int = 15_000,
+) -> list[BenchmarkCase]:
+    point_label = f"{max_points // 1000}k"
     cases = [
-        BenchmarkCase("one_vga_100fps_15k", 1, "VGA", 100, 15_000),
-        BenchmarkCase("one_hd720_60fps_15k", 1, "HD720", 60, 15_000),
-        BenchmarkCase("one_hd1080_30fps_15k", 1, "HD1080", 30, 15_000),
-        BenchmarkCase("one_hd2k_15fps_15k", 1, "HD2K", 15, 15_000),
+        BenchmarkCase(
+            f"one_vga_100fps_{point_label}", 1, "VGA", 100, max_points
+        ),
+        BenchmarkCase(
+            f"one_hd720_60fps_{point_label}", 1, "HD720", 60, max_points
+        ),
+        BenchmarkCase(
+            f"one_hd1080_30fps_{point_label}", 1, "HD1080", 30, max_points
+        ),
+        BenchmarkCase(
+            f"one_hd2k_15fps_{point_label}", 1, "HD2K", 15, max_points
+        ),
     ]
     if include_two_camera:
         cases.extend(
             [
-                BenchmarkCase("two_vga_100fps_15k", 2, "VGA", 100, 15_000),
-                BenchmarkCase("two_hd720_60fps_15k", 2, "HD720", 60, 15_000),
-                BenchmarkCase("two_hd1080_30fps_15k", 2, "HD1080", 30, 15_000),
-                BenchmarkCase("two_hd2k_15fps_15k", 2, "HD2K", 15, 15_000),
+                BenchmarkCase(
+                    f"two_vga_100fps_{point_label}", 2, "VGA", 100, max_points
+                ),
+                BenchmarkCase(
+                    f"two_hd720_60fps_{point_label}", 2, "HD720", 60, max_points
+                ),
+                BenchmarkCase(
+                    f"two_hd1080_30fps_{point_label}",
+                    2,
+                    "HD1080",
+                    30,
+                    max_points,
+                ),
+                BenchmarkCase(
+                    f"two_hd2k_15fps_{point_label}", 2, "HD2K", 15, max_points
+                ),
             ]
         )
     return cases
@@ -79,6 +103,8 @@ def build_cases(
 ) -> list[BenchmarkCase]:
     if suite == "resolution":
         return build_resolution_cases(include_two_camera)
+    if suite == "resolution-30k":
+        return build_resolution_cases(include_two_camera, max_points=30_000)
 
     cases = [
         BenchmarkCase("one_vga_30fps_15k", 1, "VGA", 30, 15_000),

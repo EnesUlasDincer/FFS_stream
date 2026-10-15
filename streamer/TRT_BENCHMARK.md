@@ -7,7 +7,9 @@ voxel filtering, and the number of cameras. It was recorded on 2026-10-15.
 Exact machine-readable measurements are available in
 [`TRT_BENCHMARK_RESULTS.json`](TRT_BENCHMARK_RESULTS.json). The separate
 capture-resolution sweep is in
-[`TRT_RESOLUTION_BENCHMARK_RESULTS.json`](TRT_RESOLUTION_BENCHMARK_RESULTS.json).
+[`TRT_RESOLUTION_BENCHMARK_RESULTS.json`](TRT_RESOLUTION_BENCHMARK_RESULTS.json),
+and the 30k sweep is in
+[`TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json`](TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json).
 
 ## Test system
 
@@ -88,6 +90,29 @@ in the inference-stage timing. HD1080 and HD2K are camera-rate-limited. They do
 not improve disparity detail with the current engine because every input is
 resized to 448x640 before inference; rebuild the engine at a larger static size
 when higher model resolution is required.
+
+## 30k capture-resolution sweep
+
+This follow-up varies capture resolution and camera count while holding the
+output at 30,000 points. It uses the corrected default X reflection, identity
+camera extrinsics, segmentation off, and both bounding-box and voxel filters
+off. Each case processes 180 frames after three warm-up runs.
+
+| Cameras | Capture pixels | Requested FPS | Stream FPS | Inference mean / p95 | Cloud mean / p95 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | VGA (672x376) | 100 | 71.34 | 9.11 / 9.95 ms | 3.84 / 5.10 ms |
+| 1 | HD720 (1280x720) | 60 | 59.97 | 10.84 / 11.34 ms | 3.14 / 3.45 ms |
+| 1 | HD1080 (1920x1080) | 30 | 29.47 | 10.68 / 11.49 ms | 2.96 / 3.30 ms |
+| 1 | HD2K (2208x1242) | 15 | 15.09 | 11.58 / 13.01 ms | 2.97 / 3.28 ms |
+| 2 | VGA (672x376) | 100 | 39.49 | 17.22 / 18.04 ms | 6.79 / 7.29 ms |
+| 2 | HD720 (1280x720) | 60 | 34.49 | 19.09 / 20.13 ms | 7.06 / 7.44 ms |
+| 2 | HD1080 (1920x1080) | 30 | 29.27 | 20.92 / 22.54 ms | 6.93 / 7.43 ms |
+| 2 | HD2K (2208x1242) | 15 | 13.03 | 24.61 / 28.20 ms | 7.61 / 10.35 ms |
+
+VGA remains compute/processing limited at 30k. HD720 is camera-limited with
+one camera but not with two; HD1080 stays close to its 30 FPS capture ceiling in
+both configurations. Two-camera HD2K falls below 15 FPS because sequential
+inference plus cloud work exceeds the camera period.
 
 ## Findings
 
@@ -177,6 +202,19 @@ python streamer/benchmark_zed_trt.py \
   --frames 180 \
   --warmup-runs 3 \
   --output-json streamer/TRT_RESOLUTION_BENCHMARK_RESULTS.json
+```
+
+Reproduce the eight 30k variations with:
+
+```bash
+python streamer/benchmark_zed_trt.py \
+  --serial <SERIAL_1> \
+  --serial <SERIAL_2> \
+  --engine-dir output \
+  --suite resolution-30k \
+  --frames 180 \
+  --warmup-runs 3 \
+  --output-json streamer/TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json
 ```
 
 ## Run one custom case

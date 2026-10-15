@@ -440,6 +440,16 @@ def save_point_cloud_ply(
         vertices.tofile(stream)
 
 
+def save_rgb_image(path: Path, image_rgb: np.ndarray) -> None:
+    """Write one native-resolution rectified RGB frame as a PNG or JPEG."""
+
+    output_path = path.expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    if not cv2.imwrite(str(output_path), image_bgr):
+        raise RuntimeError(f"Could not save RGB image to {output_path}")
+
+
 class PointCloudPublisher:
     """ZMQ publisher compatible with the repository's existing receiver."""
 
@@ -693,8 +703,8 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
     parser.add_argument(
         "--flip-x",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Reflect output X for compatibility with the legacy VR stream",
+        default=True,
+        help="Reflect output X to match the real-world/legacy VR convention (default: on)",
     )
     if camera_count == 2:
         parser.add_argument(
@@ -761,6 +771,11 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
         "--save-first-cloud",
         type=Path,
         help="Save the first processed RGB cloud as a binary PLY file",
+    )
+    parser.add_argument(
+        "--save-first-rgb",
+        type=Path,
+        help="Save camera 1's matching native-resolution rectified left RGB frame",
     )
     parser.add_argument(
         "--benchmark-frames",
@@ -872,6 +887,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
         rate = StreamRateLogger()
         projection_rng = np.random.default_rng(args.random_seed)
         pending_cloud_path = args.save_first_cloud
+        pending_rgb_path = args.save_first_rgb
         early_sample_limit = (
             args.max_points
             if args.voxel_size == 0.0 and not args.bbox_filter
@@ -916,6 +932,13 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     pending_cloud_path.expanduser().resolve(),
                 )
                 pending_cloud_path = None
+            if pending_rgb_path is not None:
+                save_rgb_image(pending_rgb_path, stereo_frames[0].left_rgb)
+                logging.info(
+                    "Saved matching native RGB frame to %s",
+                    pending_rgb_path.expanduser().resolve(),
+                )
+                pending_rgb_path = None
             publisher.publish(points, colors)
             rate.update(len(points), inference_ms, pointcloud_ms)
             if args.benchmark_frames and rate.total_frames >= args.benchmark_frames:
