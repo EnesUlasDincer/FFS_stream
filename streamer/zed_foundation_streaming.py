@@ -347,20 +347,20 @@ def disparity_to_point_cloud(
 
 
 class PointCloudProcessor:
-    """Merges, crops, downsamples, and caps the streamed cloud."""
+    """Merges, bounds, downsamples, and caps the streamed cloud."""
 
     def __init__(
         self,
         voxel_size: float,
         max_points: int,
-        crop_min: np.ndarray | None,
-        crop_max: np.ndarray | None,
+        bbox_min: np.ndarray | None,
+        bbox_max: np.ndarray | None,
         random_seed: int,
     ) -> None:
         self.voxel_size = voxel_size
         self.max_points = max_points
-        self.crop_min = crop_min
-        self.crop_max = crop_max
+        self.bbox_min = bbox_min
+        self.bbox_max = bbox_max
         self.rng = np.random.default_rng(random_seed)
 
     def process(
@@ -370,9 +370,9 @@ class PointCloudProcessor:
         colors = np.concatenate([cloud[1] for cloud in clouds], axis=0)
 
         valid = np.isfinite(points).all(axis=1) & np.isfinite(colors).all(axis=1)
-        if self.crop_min is not None and self.crop_max is not None:
-            valid &= (points >= self.crop_min).all(axis=1)
-            valid &= (points <= self.crop_max).all(axis=1)
+        if self.bbox_min is not None and self.bbox_max is not None:
+            valid &= (points >= self.bbox_min).all(axis=1)
+            valid &= (points <= self.bbox_max).all(axis=1)
         points = points[valid]
         colors = colors[valid]
 
@@ -560,6 +560,7 @@ class StreamRateLogger:
         requested_camera_fps: int,
         max_points: int,
         voxel_size: float,
+        bbox_filter: bool,
     ) -> dict[str, int | float | str | bool]:
         if self.total_frames == 0:
             raise RuntimeError("Cannot summarize an empty stream")
@@ -569,6 +570,7 @@ class StreamRateLogger:
         pointcloud = np.asarray(self.pointcloud_times_ms, dtype=np.float64)
         points = np.asarray(self.point_counts, dtype=np.float64)
         return {
+            "bbox_filter": bbox_filter,
             "camera_count": camera_count,
             "elapsed_s": round(elapsed, 4),
             "frames": self.total_frames,
@@ -692,7 +694,12 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
             action="store_true",
             help="Deprecated compatibility flag; identity transforms are now the default",
         )
-    parser.add_argument("--resolution", choices=("VGA", "HD720", "HD1080"), default="VGA")
+    parser.add_argument(
+        "--resolution",
+        choices=("VGA", "HD720", "HD1080", "HD2K"),
+        default="VGA",
+        help="ZED capture resolution; TensorRT resolution comes from --engine-dir",
+    )
     parser.add_argument("--camera-fps", type=int, default=30)
     parser.add_argument("--warmup-runs", type=int, default=2)
     parser.add_argument("--z-min", type=float, default=0.10, help="Minimum depth in metres")
@@ -715,8 +722,30 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
         default=15_000,
         help="Maximum points per message; 0 disables",
     )
-    parser.add_argument("--crop-min", nargs=3, type=float, metavar=("X", "Y", "Z"))
-    parser.add_argument("--crop-max", nargs=3, type=float, metavar=("X", "Y", "Z"))
+    parser.add_argument(
+        "--bbox-filter",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable or disable the 3D axis-aligned bounding-box filter",
+    )
+    parser.add_argument(
+        "--bbox-min",
+        "--crop-min",
+        dest="bbox_min",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        help="Bounding-box minimum XYZ in the output frame, in metres",
+    )
+    parser.add_argument(
+        "--bbox-max",
+        "--crop-max",
+        dest="bbox_max",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        help="Bounding-box maximum XYZ in the output frame, in metres",
+    )
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--discovery-port", type=int, default=5556)
     parser.add_argument("--random-seed", type=int, default=0)
@@ -762,18 +791,23 @@ def _validate_args(
         parser.error(f"two-camera mode requires exactly {camera_count} --serial arguments")
     if args.warmup_runs < 0:
         parser.error("--warmup-runs cannot be negative")
+    if args.camera_fps <= 0:
+        parser.error("--camera-fps must be positive")
     if args.benchmark_frames < 0:
         parser.error("--benchmark-frames cannot be negative")
     if not (0.0 < args.z_min < args.z_max):
         parser.error("depth range must satisfy 0 < --z-min < --z-max")
     if args.voxel_size < 0.0 or args.max_points < 0:
         parser.error("--voxel-size and --max-points cannot be negative")
-    if (args.crop_min is None) != (args.crop_max is None):
-        parser.error("--crop-min and --crop-max must be supplied together")
-    if args.crop_min is not None and np.any(
-        np.asarray(args.crop_min) >= np.asarray(args.crop_max)
+    bbox_values_supplied = args.bbox_min is not None or args.bbox_max is not None
+    if args.bbox_filter and (args.bbox_min is None or args.bbox_max is None):
+        parser.error("--bbox-filter requires both --bbox-min and --bbox-max")
+    if not args.bbox_filter and bbox_values_supplied:
+        parser.error("--bbox-min/--bbox-max require --bbox-filter")
+    if args.bbox_filter and np.any(
+        np.asarray(args.bbox_min) >= np.asarray(args.bbox_max)
     ):
-        parser.error("every --crop-min value must be smaller than --crop-max")
+        parser.error("every --bbox-min value must be smaller than --bbox-max")
 
 
 def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
@@ -784,6 +818,10 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     logging.info("Segmentation enabled: %s", SEGMENTATION_ENABLED)
+    if args.bbox_filter:
+        logging.info("Bounding-box filter: min=%s max=%s", args.bbox_min, args.bbox_max)
+    else:
+        logging.info("Bounding-box filter: disabled")
     if camera_count == 2 and not args.transform:
         logging.warning(
             "Using identity transforms for both cameras; clouds are unregistered (FPS test)"
@@ -806,15 +844,15 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
         processor = PointCloudProcessor(
             voxel_size=args.voxel_size,
             max_points=args.max_points,
-            crop_min=(
+            bbox_min=(
                 None
-                if args.crop_min is None
-                else np.asarray(args.crop_min, dtype=np.float32)
+                if not args.bbox_filter
+                else np.asarray(args.bbox_min, dtype=np.float32)
             ),
-            crop_max=(
+            bbox_max=(
                 None
-                if args.crop_max is None
-                else np.asarray(args.crop_max, dtype=np.float32)
+                if not args.bbox_filter
+                else np.asarray(args.bbox_max, dtype=np.float32)
             ),
             random_seed=args.random_seed,
         )
@@ -823,7 +861,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
         pending_cloud_path = args.save_first_cloud
         early_sample_limit = (
             args.max_points
-            if args.voxel_size == 0.0 and args.crop_min is None
+            if args.voxel_size == 0.0 and not args.bbox_filter
             else 0
         )
 
@@ -874,6 +912,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     requested_camera_fps=args.camera_fps,
                     max_points=args.max_points,
                     voxel_size=args.voxel_size,
+                    bbox_filter=args.bbox_filter,
                 )
                 logging.info("BENCHMARK_RESULT %s", json.dumps(result, sort_keys=True))
                 return 0

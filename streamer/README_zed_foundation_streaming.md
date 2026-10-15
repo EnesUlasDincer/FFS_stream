@@ -14,13 +14,13 @@ only rectified left/right images and calibration; ZED native depth is disabled.
 ZED rectified left/right RGB
         |
         v
-resize to the static TensorRT input (448x640) and scale intrinsics
+resize to the configured static TensorRT input and scale intrinsics
         |
         v
 feature_runner.engine -> Triton GWC volume -> post_runner.engine
         |
         v
-disparity -> metric XYZ + left RGB -> crop/sample/merge
+disparity -> metric XYZ + left RGB -> bounding box/sample/merge
         |
         +--------------------+
         |                    |
@@ -67,6 +67,28 @@ provided by the local ZED SDK installation:
 
 The tested environment used Python 3.12, TensorRT 10.16.1.11, PyTorch
 2.11.0+cu130, and CUDA 13.0.
+
+## Change these values first
+
+Run commands from the repository root after activating the environment:
+
+```bash
+cd /path/to/Fast-FoundationStereo
+conda activate ffs
+```
+
+| Value | What to change | Recommended starting point |
+|---|---|---|
+| `<SERIAL>` | Your ZED serial from ZED Explorer | One physical camera |
+| `--engine-dir` | Directory containing both engines and `onnx.yaml` | `output` |
+| `--resolution` | ZED capture resolution | `VGA` for speed |
+| `--camera-fps` | Requested capture-rate ceiling | `100` at VGA |
+| `--max-points` | Output density versus speed | `15000` balanced, `5000` fastest |
+| `--voxel-size` | CPU voxel filter | `0` for real time |
+| `--transform` | Camera 2 to camera 1 extrinsic matrix | Required for real merging |
+| `--port` | ZMQ publisher port | `5555` |
+
+Segmentation is hard-disabled. You do not need to pass a segmentation option.
 
 ## Quick start: one camera
 
@@ -126,6 +148,94 @@ multiple matrices, append a dotted key to the filename:
 ```bash
 --transform /path/to/extrinsics.yml:T_follower_to_main
 ```
+
+## Bounding-box filter
+
+The box is disabled by default. Enable it and provide minimum and maximum XYZ
+corners in metres:
+
+```bash
+python streamer/Streamer_real_one_cam.py \
+  --serial <SERIAL> \
+  --camera-fps 100 \
+  --max-points 15000 \
+  --bbox-filter \
+  --bbox-min -0.5 -0.5 0.2 \
+  --bbox-max  0.5  0.5 2.0
+```
+
+With an identity transform, X points right, Y points down, and Z points forward
+from the rectified left camera. With camera transforms, the box is evaluated in
+the merged output frame.
+
+Disable it by omitting the option or explicitly using:
+
+```bash
+--no-bbox-filter
+```
+
+`--bbox-min` and `--bbox-max` are required when the filter is enabled. The
+filter must construct and inspect the dense cloud before the final point cap;
+the measured VGA/100, 15k case ran at 37.76 FPS versus 92.79 FPS without it.
+
+## Increasing resolution
+
+There are two independent resolutions:
+
+1. `--resolution` controls ZED image capture.
+2. `onnx.yaml` inside `--engine-dir` controls the TensorRT model resolution.
+
+The camera modes now include `VGA`, `HD720`, `HD1080`, and `HD2K`. This tested
+command opens HD2K capture at 2208x1242/15 FPS:
+
+```bash
+python streamer/Streamer_real_one_cam.py \
+  --serial <SERIAL> \
+  --resolution HD2K \
+  --camera-fps 15 \
+  --engine-dir output
+```
+
+With the existing `output` engines, that HD2K image is still resized to
+448x640. To increase the actual disparity resolution, build a new static engine
+set. A practical HD720-aligned TensorRT size is 704x1280 because both dimensions
+must be divisible by 32:
+
+```bash
+python scripts/make_onnx.py \
+  --model_dir weights/20-30-48/model_best_bp2_serialize.pth \
+  --save_path "$PWD/output_hd720/" \
+  --height 704 \
+  --width 1280 \
+  --valid_iters 8 \
+  --max_disp 192
+
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=output_hd720/feature_runner.onnx \
+  --saveEngine=output_hd720/feature_runner.engine \
+  --fp16
+
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=output_hd720/post_runner.onnx \
+  --saveEngine=output_hd720/post_runner.engine \
+  --fp16
+```
+
+Then run the higher-resolution engine:
+
+```bash
+python streamer/Streamer_real_one_cam.py \
+  --serial <SERIAL> \
+  --resolution HD720 \
+  --camera-fps 60 \
+  --engine-dir output_hd720 \
+  --max-points 15000
+```
+
+Higher model resolution uses substantially more GPU memory and is slower. The
+engine plans are GPU-specific and should be rebuilt on the deployment GPU.
+Increasing horizontal resolution can also require a larger `--max_disp` to
+preserve the same near-depth range; that further increases memory and latency.
 
 ## 3D point-cloud viewer
 
@@ -193,20 +303,21 @@ Each subprocess stops deterministically after `--benchmark-frames`, prints a
 
 The measured results on an RTX 5080 were:
 
-| Cameras | Capture | Points | Voxel | Stream FPS | TRT mean | Cloud mean |
-|---:|---|---:|---:|---:|---:|---:|
-| 1 | VGA/30 | 15k | off | 30.20 | 8.93 ms | 1.97 ms |
-| 1 | VGA/60 | 15k | off | 60.13 | 9.04 ms | 1.92 ms |
-| 1 | VGA/100 | 5k | off | 95.47 | 8.69 ms | 1.33 ms |
-| 1 | VGA/100 | 15k | off | 88.38 | 8.74 ms | 1.91 ms |
-| 1 | VGA/100 | 30k | off | 80.90 | 8.85 ms | 2.72 ms |
-| 1 | VGA/100 | unlimited | off | 39.95 | 9.01 ms | 12.76 ms |
-| 1 | VGA/100 | 15k | 5 mm | 10.95 | 8.92 ms | 81.49 ms |
-| 1 | HD720/60 | 15k | off | 59.90 | 9.51 ms | 2.05 ms |
-| 2 | VGA/100 | 5k | off | 46.52 | 17.55 ms | 2.94 ms |
-| 2 | VGA/100 | 15k | off | 43.04 | 17.67 ms | 4.42 ms |
-| 2 | VGA/100 | 30k | off | 39.52 | 17.59 ms | 6.38 ms |
-| 2 | VGA/100 | 15k | 5 mm | 4.62 | 17.78 ms | 197.14 ms |
+| Cameras | Capture | Points | Box | Voxel | Stream FPS | TRT mean | Cloud mean |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | VGA/30 | 15k | off | off | 30.12 | 8.45 ms | 1.96 ms |
+| 1 | VGA/60 | 15k | off | off | 59.94 | 8.35 ms | 1.87 ms |
+| 1 | VGA/100 | 5k | off | off | 99.96 | 8.32 ms | 1.29 ms |
+| 1 | VGA/100 | 15k | off | off | 92.79 | 8.32 ms | 1.91 ms |
+| 1 | VGA/100 | 15k | on | off | 37.76 | 8.58 ms | 17.15 ms |
+| 1 | VGA/100 | 30k | off | off | 84.80 | 8.37 ms | 2.73 ms |
+| 1 | VGA/100 | unlimited | off | off | 42.44 | 8.61 ms | 11.94 ms |
+| 1 | VGA/100 | 15k | off | 5 mm | 10.88 | 8.60 ms | 82.50 ms |
+| 1 | HD720/60 | 15k | off | off | 59.90 | 9.53 ms | 2.04 ms |
+| 2 | VGA/100 | 5k | off | off | 48.75 | 16.70 ms | 2.87 ms |
+| 2 | VGA/100 | 15k | off | off | 45.31 | 16.80 ms | 4.21 ms |
+| 2 | VGA/100 | 30k | off | off | 41.32 | 16.86 ms | 6.13 ms |
+| 2 | VGA/100 | 15k | off | 5 mm | 5.05 | 16.98 ms | 179.36 ms |
 
 See [`TRT_BENCHMARK.md`](TRT_BENCHMARK.md) for the full methodology, p95
 latencies, and conclusions. Exact values are in
@@ -217,6 +328,7 @@ latencies, and conclusions. Exact values are in
 - One-camera maximum throughput: VGA/100, 5k points, voxel filtering off.
 - One-camera balanced output: VGA/100, 15k points, voxel filtering off.
 - Two-camera maximum throughput: VGA/100, 5k points, voxel filtering off.
+- Leave the bounding box disabled unless spatial rejection is required.
 - Avoid the current NumPy voxel filter in the real-time loop. It processes the
   full dense cloud before limiting points and is the dominant bottleneck.
 - HD720 does not increase model detail with the current engines because every
@@ -240,12 +352,13 @@ python streamer/Streamer_real_one_cam.py \
 | `--z-max` | 5.0 m | Maximum retained depth |
 | `--max-points` | 15000 | Random output cap; `0` keeps all points |
 | `--voxel-size` | 0 | Voxel size in metres; `0` disables filtering |
-| `--crop-min X Y Z` | unset | Minimum output-frame crop corner |
-| `--crop-max X Y Z` | unset | Maximum output-frame crop corner |
+| `--bbox-filter` | disabled | Enable the axis-aligned 3D box |
+| `--bbox-min X Y Z` | required when enabled | Minimum output-frame corner |
+| `--bbox-max X Y Z` | required when enabled | Maximum output-frame corner |
 | `--remove-invisible` | enabled | Reject correspondences outside the right image |
 | `--random-seed` | 0 | Reproducible point sampling |
 
-When crop and voxel filtering are disabled, the implementation samples valid
+When box and voxel filtering are disabled, the implementation samples valid
 pixels before constructing the complete dense cloud. This early sampling is
 why `--max-points 5000` and `15000` are much faster than unlimited output.
 

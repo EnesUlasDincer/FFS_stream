@@ -2,7 +2,9 @@
 
 > **ZED TensorRT streaming extension:** This repository adds one- and two-camera
 > ZED capture, two-stage TensorRT depth, RGB point-cloud streaming, repeatable
-> performance benchmarks, saved PLY output, and an Open3D file/live viewer.
+> performance benchmarks, higher-resolution capture/engine instructions, an
+> optional 3D bounding-box filter, saved PLY output, and an Open3D file/live
+> viewer.
 > Start with the
 > [ZED streaming guide](streamer/README_zed_foundation_streaming.md), review the
 > [benchmark](streamer/TRT_BENCHMARK.md), or open the included

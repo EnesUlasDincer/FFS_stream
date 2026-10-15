@@ -26,6 +26,8 @@ class BenchmarkCase:
     camera_fps: int
     max_points: int
     voxel_size: float = 0.0
+    bbox_min: tuple[float, float, float] | None = None
+    bbox_max: tuple[float, float, float] | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +54,15 @@ def build_cases(include_two_camera: bool) -> list[BenchmarkCase]:
         BenchmarkCase("one_vga_60fps_15k", 1, "VGA", 60, 15_000),
         BenchmarkCase("one_vga_100fps_5k", 1, "VGA", 100, 5_000),
         BenchmarkCase("one_vga_100fps_15k", 1, "VGA", 100, 15_000),
+        BenchmarkCase(
+            "one_vga_100fps_bbox",
+            1,
+            "VGA",
+            100,
+            15_000,
+            bbox_min=(-0.5, -0.5, 0.2),
+            bbox_max=(0.5, 0.5, 2.0),
+        ),
         BenchmarkCase("one_vga_100fps_30k", 1, "VGA", 100, 30_000),
         BenchmarkCase("one_vga_100fps_unlimited", 1, "VGA", 100, 0),
         BenchmarkCase("one_vga_100fps_voxel5mm", 1, "VGA", 100, 15_000, 0.005),
@@ -110,6 +121,12 @@ def build_command(
     ]
     for serial in args.serial[: case.camera_count]:
         command.extend(("--serial", str(serial)))
+    if case.bbox_min is not None and case.bbox_max is not None:
+        command.append("--bbox-filter")
+        command.append("--bbox-min")
+        command.extend(str(value) for value in case.bbox_min)
+        command.append("--bbox-max")
+        command.extend(str(value) for value in case.bbox_max)
     return command
 
 
