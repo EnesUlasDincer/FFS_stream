@@ -25,7 +25,7 @@ and the 30k sweep is in
 | Native ZED depth | disabled |
 | Segmentation | disabled |
 | Transform | identity |
-| XYZ scale | 1.0 (historical runs, before the 2.0 default) |
+| XYZ scale | 1.0 (historical runs, before the 1.5 default) |
 | ZMQ | publisher enabled; no subscriber during measurements |
 
 TensorRT warned that the existing plans were created on a different GPU model.
@@ -47,7 +47,7 @@ before treating these numbers as final deployment measurements.
 - Two-camera identity clouds were intentionally unregistered for throughput
   testing.
 - These published measurements used unscaled XYZ (`--xyz-scale 1`). Current
-  streaming and benchmark commands default to `--xyz-scale 2`, and new JSON
+  streaming and benchmark commands default to `--xyz-scale 1.5`, and new JSON
   results record the scale explicitly.
 
 ## Parameter matrix

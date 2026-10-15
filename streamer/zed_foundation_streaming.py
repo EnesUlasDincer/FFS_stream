@@ -711,10 +711,10 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
     parser.add_argument(
         "--xyz-scale",
         type=float,
-        default=2.0,
+        default=1.5,
         help=(
             "Uniformly scale output XYZ and transform translations after depth "
-            "back-projection (default: 2.0; use 1.0 for the original metric scale)"
+            "back-projection (default: 1.5; use 1.0 for the original metric scale)"
         ),
     )
     if camera_count == 2:

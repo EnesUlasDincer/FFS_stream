@@ -39,7 +39,7 @@ if __name__=="__main__":
   parser.add_argument('--max_disp', type=int, default=192, help='maximum disparity')
   parser.add_argument('--zfar', type=float, default=100, help="max depth to include in point cloud")
   parser.add_argument(
-    '--xyz-scale', '--xyz_scale', dest='xyz_scale', type=float, default=2.0,
+    '--xyz-scale', '--xyz_scale', dest='xyz_scale', type=float, default=1.5,
     help='uniform saved/visualized point-cloud XYZ scale')
   args = parser.parse_args()
 

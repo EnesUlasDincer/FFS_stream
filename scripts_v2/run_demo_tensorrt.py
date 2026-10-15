@@ -47,8 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--xyz-scale",
         type=float,
-        default=2.0,
-        help="Uniform scale applied to saved/visualized point-cloud XYZ (default: 2.0)",
+        default=1.5,
+        help="Uniform scale applied to saved/visualized point-cloud XYZ (default: 1.5)",
     )
     parser.add_argument(
         "--remove-invisible",

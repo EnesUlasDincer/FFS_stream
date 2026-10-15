@@ -1,0 +1,72 @@
+{
+  "camera_count": 1,
+  "flip_x": true,
+  "segmentation": false,
+  "variants": [
+    {
+      "camera_fps": 100,
+      "max_points": 15000,
+      "ply": "one_zed_vga_15000.ply",
+      "resolution": "VGA",
+      "rgb_reference": "one_zed_vga_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 100,
+      "max_points": 30000,
+      "ply": "one_zed_vga_30000.ply",
+      "resolution": "VGA",
+      "rgb_reference": "one_zed_vga_rgb.png",
+      "rgb_same_frame": true
+    },
+    {
+      "camera_fps": 60,
+      "max_points": 15000,
+      "ply": "one_zed_hd720_15000.ply",
+      "resolution": "HD720",
+      "rgb_reference": "one_zed_hd720_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 60,
+      "max_points": 30000,
+      "ply": "one_zed_hd720_30000.ply",
+      "resolution": "HD720",
+      "rgb_reference": "one_zed_hd720_rgb.png",
+      "rgb_same_frame": true
+    },
+    {
+      "camera_fps": 30,
+      "max_points": 15000,
+      "ply": "one_zed_hd1080_15000.ply",
+      "resolution": "HD1080",
+      "rgb_reference": "one_zed_hd1080_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 30,
+      "max_points": 30000,
+      "ply": "one_zed_hd1080_30000.ply",
+      "resolution": "HD1080",
+      "rgb_reference": "one_zed_hd1080_rgb.png",
+      "rgb_same_frame": true
+    },
+    {
+      "camera_fps": 15,
+      "max_points": 15000,
+      "ply": "one_zed_hd2k_15000.ply",
+      "resolution": "HD2K",
+      "rgb_reference": "one_zed_hd2k_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 15,
+      "max_points": 30000,
+      "ply": "one_zed_hd2k_30000.ply",
+      "resolution": "HD2K",
+      "rgb_reference": "one_zed_hd2k_rgb.png",
+      "rgb_same_frame": true
+    }
+  ],
+  "xyz_scale": 1.5
+}

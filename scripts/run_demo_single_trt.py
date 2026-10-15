@@ -226,7 +226,7 @@ if __name__ == '__main__':
     parser.add_argument('--zfar', type=float, default=100,
                         help='Max depth (m) to include in point cloud')
     parser.add_argument('--xyz-scale', '--xyz_scale', dest='xyz_scale',
-                        type=float, default=2.0,
+                        type=float, default=1.5,
                         help='Uniform saved/visualized point-cloud XYZ scale')
     args = parser.parse_args()
 

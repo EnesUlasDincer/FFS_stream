@@ -6,9 +6,11 @@ The viewer loads the colored PLY samples directly from this repository, shows
 the native-resolution rectified RGB reference captured with each 30k cloud,
 and includes RGB XYZ axes. The 15k cloud is a separate capture of the same
 scene. X is already reflected to match the verified real-world/legacy VR
-convention, and XYZ is uniformly scaled by 2 to match the current real-world
+convention, and XYZ is uniformly scaled by 1.5 to match the current real-world
 size calibration. The browser's display-scale control is non-destructive and
-starts at 1x because the PLY coordinates already contain the 2x scale.
+starts at 1x because the PLY coordinates already contain the 1.5x scale.
+[`manifest.json`](manifest.json) records the resolution, camera rate, point
+limit, scale, and whether each RGB reference is from the exact PLY frame.
 
 | Capture mode | RGB reference | Point clouds |
 |---|---|---|

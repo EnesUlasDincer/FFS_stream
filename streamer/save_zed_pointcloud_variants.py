@@ -60,7 +60,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--xyz-scale",
         action="append",
         type=float,
-        help="Uniform XYZ scale; repeat as needed (default: 2.0)",
+        help="Uniform XYZ scale; repeat as needed (default: 1.5)",
     )
     parser.add_argument(
         "--flip-x",
@@ -160,7 +160,7 @@ def build_command(
 
 def validate_args(args: argparse.Namespace) -> None:
     point_limits = args.max_points or [15_000, 30_000]
-    scales = args.xyz_scale or [2.0]
+    scales = args.xyz_scale or [1.5]
     if any(limit <= 0 for limit in point_limits):
         raise ValueError("Every --max-points value must be positive")
     if any(not math.isfinite(scale) or scale <= 0.0 for scale in scales):
@@ -197,7 +197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     validate_args(args)
     resolutions = unique(args.resolution or list(DEFAULT_CAMERA_FPS))
     point_limits = unique(args.max_points or [15_000, 30_000])
-    scales = unique(args.xyz_scale or [2.0])
+    scales = unique(args.xyz_scale or [1.5])
     combinations = list(itertools.product(resolutions, point_limits, scales))
     if args.base_port + len(combinations) * 2 - 1 > 65535:
         raise ValueError("The selected variants exceed the available port range")
