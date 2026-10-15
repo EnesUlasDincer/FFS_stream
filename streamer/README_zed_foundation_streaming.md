@@ -354,7 +354,7 @@ preserve the same near-depth range; that further increases memory and latency.
 The viewer shows a coordinate frame by default: **X is red, Y is green, and Z
 is blue**. Use `--axis-size` to change its size in metres.
 
-[Open the interactive browser viewer](https://htmlpreview.github.io/?https://raw.githubusercontent.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/pointcloud_samples/index.html).
+[Open the interactive browser viewer](https://raw.githack.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/pointcloud_samples/index.html).
 It switches between every 15k/30k colored PLY, shows the native RGB reference
 captured with each 30k cloud, and supports mouse orbit, pan, zoom, point sizing,
 and view reset. Each 15k file is a separate capture of the same scene.

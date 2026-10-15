@@ -1,6 +1,6 @@
 # Interactive RGB point-cloud samples
 
-[Open the interactive 3D viewer](https://htmlpreview.github.io/?https://raw.githubusercontent.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/pointcloud_samples/index.html)
+[Open the interactive 3D viewer](https://raw.githack.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/pointcloud_samples/index.html)
 
 The viewer loads the colored PLY samples directly from this repository, shows
 the native-resolution rectified RGB reference captured with each 30k cloud,
