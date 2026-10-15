@@ -91,15 +91,35 @@ conda activate ffs
 
 Segmentation is hard-disabled. You do not need to pass a segmentation option.
 
-## Quick start: one camera
+## One-camera command guide
 
-Use the first available camera at the default VGA/30 capture mode:
+Run every command from the repository root:
 
 ```bash
-python streamer/Streamer_real_one_cam.py --engine-dir output
+cd /path/to/Fast-FoundationStereo
+conda activate ffs
 ```
 
-Select a camera and request VGA/100 for a throughput run:
+### Stream one camera now
+
+This is the recommended balanced command. It uses the first available ZED,
+runs Fast-FoundationStereo with TensorRT, and publishes 15,000-point RGB clouds
+on `tcp://*:5555`:
+
+```bash
+python streamer/Streamer_real_one_cam.py \
+  --engine-dir output \
+  --resolution VGA \
+  --camera-fps 100 \
+  --max-points 15000
+```
+
+Press `Ctrl+C` to stop it. Segmentation, voxel filtering, and bounding-box
+filtering are disabled. The one-camera transform is the 4x4 identity matrix.
+
+### Select a specific camera
+
+Add its ZED serial number when more than one camera is connected:
 
 ```bash
 python streamer/Streamer_real_one_cam.py \
@@ -110,13 +130,87 @@ python streamer/Streamer_real_one_cam.py \
   --max-points 15000
 ```
 
-`--camera-fps` is the requested ZED capture rate, not the TensorRT rate. A
-request of 30 caps the complete loop near 30 FPS even if inference is faster.
-The achieved rate can still be lower because capture, inference, projection,
-sampling, and publishing all take time.
+### Stream and view the live cloud
 
-The one-camera transform defaults to the 4x4 identity matrix, so points remain
-in the rectified left optical frame.
+Use two terminals. The viewer subscribes to the stream created by terminal 1:
+
+```bash
+# Terminal 1: publish the point cloud
+conda activate ffs
+cd /path/to/Fast-FoundationStereo
+python streamer/Streamer_real_one_cam.py \
+  --engine-dir output \
+  --resolution VGA \
+  --camera-fps 100 \
+  --max-points 15000
+```
+
+```bash
+# Terminal 2: display the point cloud
+conda activate ffs
+cd /path/to/Fast-FoundationStereo
+python streamer/view_point_cloud.py live \
+  --endpoint tcp://127.0.0.1:5555 \
+  --point-size 2.0
+```
+
+For a viewer on another computer, replace `127.0.0.1` with the streamer's IP
+address and allow TCP port 5555 through the firewall.
+
+### Save one cloud to a PLY file
+
+This saves the first processed cloud and continues streaming:
+
+```bash
+python streamer/Streamer_real_one_cam.py \
+  --engine-dir output \
+  --resolution VGA \
+  --camera-fps 100 \
+  --max-points 15000 \
+  --save-first-cloud output_clouds/one_camera.ply
+```
+
+Open the saved cloud with:
+
+```bash
+python streamer/view_point_cloud.py file output_clouds/one_camera.ply
+```
+
+### Run a finite one-camera speed test
+
+This streams 180 frames, prints a final `BENCHMARK_RESULT` JSON line, releases
+the camera, and exits automatically:
+
+```bash
+python streamer/Streamer_real_one_cam.py \
+  --engine-dir output \
+  --resolution VGA \
+  --camera-fps 100 \
+  --max-points 15000 \
+  --benchmark-frames 180
+```
+
+### Choose speed or density
+
+| Goal | Change | Previously measured complete-loop rate |
+|---|---|---:|
+| Maximum speed | `--max-points 5000` | 99.96 FPS |
+| Balanced | `--max-points 15000` | 88-93 FPS |
+| Denser cloud | `--max-points 30000` | 84.80 FPS |
+
+These rates were measured on the documented RTX 5080 system and will vary.
+Keep `--voxel-size 0` and omit `--bbox-filter` for maximum throughput.
+
+`--camera-fps` is the requested ZED capture-rate ceiling, not the TensorRT
+rate. A request of 30 caps the complete loop near 30 FPS even if inference is
+faster. The achieved rate can still be lower because capture, inference,
+projection, sampling, and publishing all take time.
+
+Show every available option with:
+
+```bash
+python streamer/Streamer_real_one_cam.py --help
+```
 
 ## Quick start: two cameras
 
