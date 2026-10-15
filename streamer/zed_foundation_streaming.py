@@ -16,6 +16,7 @@ This module contains the shared implementation. Use
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import socket
 import struct
@@ -522,23 +523,67 @@ class PointCloudPublisher:
 
 class StreamRateLogger:
     def __init__(self) -> None:
-        self.started = time.perf_counter()
-        self.frames = 0
-
-    def update(self, points: int, inference_ms: float) -> None:
-        self.frames += 1
         now = time.perf_counter()
-        elapsed = now - self.started
+        self.total_started = now
+        self.interval_started = now
+        self.interval_frames = 0
+        self.total_frames = 0
+        self.inference_times_ms: list[float] = []
+        self.pointcloud_times_ms: list[float] = []
+        self.point_counts: list[int] = []
+
+    def update(self, points: int, inference_ms: float, pointcloud_ms: float) -> None:
+        self.interval_frames += 1
+        self.total_frames += 1
+        self.inference_times_ms.append(inference_ms)
+        self.pointcloud_times_ms.append(pointcloud_ms)
+        self.point_counts.append(points)
+        now = time.perf_counter()
+        elapsed = now - self.interval_started
         if elapsed >= 1.0:
             logging.info(
-                "Stream %.1f FPS | inference %.1f ms | %d points | segmentation=%s",
-                self.frames / elapsed,
+                "Stream %.1f FPS | inference %.1f ms | cloud %.1f ms | "
+                "%d points | segmentation=%s",
+                self.interval_frames / elapsed,
                 inference_ms,
+                pointcloud_ms,
                 points,
                 SEGMENTATION_ENABLED,
             )
-            self.frames = 0
-            self.started = now
+            self.interval_frames = 0
+            self.interval_started = now
+
+    def benchmark_result(
+        self,
+        camera_count: int,
+        resolution: str,
+        requested_camera_fps: int,
+        max_points: int,
+        voxel_size: float,
+    ) -> dict[str, int | float | str | bool]:
+        if self.total_frames == 0:
+            raise RuntimeError("Cannot summarize an empty stream")
+
+        elapsed = time.perf_counter() - self.total_started
+        inference = np.asarray(self.inference_times_ms, dtype=np.float64)
+        pointcloud = np.asarray(self.pointcloud_times_ms, dtype=np.float64)
+        points = np.asarray(self.point_counts, dtype=np.float64)
+        return {
+            "camera_count": camera_count,
+            "elapsed_s": round(elapsed, 4),
+            "frames": self.total_frames,
+            "inference_mean_ms": round(float(inference.mean()), 4),
+            "inference_p95_ms": round(float(np.percentile(inference, 95)), 4),
+            "max_points": max_points,
+            "pointcloud_mean_ms": round(float(pointcloud.mean()), 4),
+            "pointcloud_p95_ms": round(float(np.percentile(pointcloud, 95)), 4),
+            "points_mean": round(float(points.mean()), 1),
+            "requested_camera_fps": requested_camera_fps,
+            "resolution": resolution,
+            "segmentation": SEGMENTATION_ENABLED,
+            "stream_fps": round(self.total_frames / elapsed, 4),
+            "voxel_size_m": voxel_size,
+        }
 
 
 def _matrix_from_yaml(data: Any, key: str | None, source: Path) -> np.ndarray:
@@ -680,6 +725,12 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
         type=Path,
         help="Save the first processed RGB cloud as a binary PLY file",
     )
+    parser.add_argument(
+        "--benchmark-frames",
+        type=int,
+        default=0,
+        help="Stop after this many streamed frames and print BENCHMARK_RESULT JSON",
+    )
     return parser
 
 
@@ -711,6 +762,8 @@ def _validate_args(
         parser.error(f"two-camera mode requires exactly {camera_count} --serial arguments")
     if args.warmup_runs < 0:
         parser.error("--warmup-runs cannot be negative")
+    if args.benchmark_frames < 0:
+        parser.error("--benchmark-frames cannot be negative")
     if not (0.0 < args.z_min < args.z_max):
         parser.error("depth range must satisfy 0 < --z-min < --z-max")
     if args.voxel_size < 0.0 or args.max_points < 0:
@@ -785,6 +838,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
             disparities, prepared_frames = runner.infer(stereo_frames)
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
+            pointcloud_start = time.perf_counter()
             clouds = [
                 disparity_to_point_cloud(
                     disparity=disparity,
@@ -802,6 +856,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                 )
             ]
             points, colors = processor.process(clouds)
+            pointcloud_ms = (time.perf_counter() - pointcloud_start) * 1000.0
             if pending_cloud_path is not None:
                 save_point_cloud_ply(pending_cloud_path, points, colors)
                 logging.info(
@@ -811,7 +866,17 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                 )
                 pending_cloud_path = None
             publisher.publish(points, colors)
-            rate.update(len(points), inference_ms)
+            rate.update(len(points), inference_ms, pointcloud_ms)
+            if args.benchmark_frames and rate.total_frames >= args.benchmark_frames:
+                result = rate.benchmark_result(
+                    camera_count=camera_count,
+                    resolution=args.resolution,
+                    requested_camera_fps=args.camera_fps,
+                    max_points=args.max_points,
+                    voxel_size=args.voxel_size,
+                )
+                logging.info("BENCHMARK_RESULT %s", json.dumps(result, sort_keys=True))
+                return 0
 
     except KeyboardInterrupt:
         logging.info("Stopping point-cloud stream")

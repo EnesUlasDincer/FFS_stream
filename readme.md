@@ -1,5 +1,13 @@
 # Fast-FoundationStereo: Real-Time Zero-Shot Stereo Matching
 
+> **ZED TensorRT streaming extension:** This repository adds one- and two-camera
+> ZED capture, two-stage TensorRT depth, RGB point-cloud streaming, repeatable
+> performance benchmarks, saved PLY output, and an Open3D file/live viewer.
+> Start with the
+> [ZED streaming guide](streamer/README_zed_foundation_streaming.md), review the
+> [benchmark](streamer/TRT_BENCHMARK.md), or open the included
+> [sample point cloud](streamer/sample_one_zed_15000.ply).
+
 This is the official implementation of our paper accepted to CVPR 2026
 
 [[Website]](https://nvlabs.github.io/Fast-FoundationStereo/) [[Paper]](https://arxiv.org/abs/2512.11130) [[Video]](https://www.youtube.com/watch?v=2BUYZojCzXE)
