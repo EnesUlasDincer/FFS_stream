@@ -24,7 +24,20 @@ def add_view_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
+    parser.add_argument(
+        "--axis-size",
+        type=float,
+        default=0.5,
+        help="Length of the RGB XYZ coordinate axes in metres (default: 0.5)",
+    )
     parser.add_argument("--no-axis", action="store_true")
+    parser.add_argument(
+        "--flip-axis",
+        action="append",
+        choices=("x", "y", "z"),
+        default=[],
+        help="Display-only axis reflection; repeat to flip multiple axes",
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,15 +114,31 @@ def print_cloud_stats(points: np.ndarray) -> None:
     print(f"Maximum XYZ [m]: {maximum}")
 
 
+def transform_points_for_display(
+    points: np.ndarray,
+    flipped_axes: Sequence[str],
+) -> np.ndarray:
+    """Apply optional display-only reflections without modifying saved data."""
+
+    axes = set(flipped_axes)
+    if not axes:
+        return points
+    transformed = points.copy()
+    for name, column in (("x", 0), ("y", 1), ("z", 2)):
+        if name in axes:
+            transformed[:, column] *= -1.0
+    return transformed
+
+
 def configure_window(visualizer: Any, args: argparse.Namespace) -> None:
     render = visualizer.get_render_option()
     render.point_size = args.point_size
     render.background_color = np.asarray(args.background, dtype=np.float64)
 
 
-def add_axis(visualizer: Any, o3d: Any, hidden: bool) -> None:
-    if not hidden:
-        axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.25)
+def add_axis(visualizer: Any, o3d: Any, args: argparse.Namespace) -> None:
+    if not args.no_axis:
+        axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=args.axis_size)
         visualizer.add_geometry(axis, reset_bounding_box=False)
 
 
@@ -123,6 +152,10 @@ def open_file(args: argparse.Namespace) -> int:
     points = np.asarray(cloud.points)
     if len(points) == 0:
         raise RuntimeError(f"No points could be read from {path}")
+    points = transform_points_for_display(points, args.flip_axis)
+    if args.flip_axis:
+        cloud.points = o3d.utility.Vector3dVector(points)
+        print(f"Display-only flipped axes: {', '.join(sorted(set(args.flip_axis)))}")
     print_cloud_stats(points)
     if args.headless:
         return 0
@@ -137,7 +170,7 @@ def open_file(args: argparse.Namespace) -> int:
     try:
         configure_window(visualizer, args)
         visualizer.add_geometry(cloud)
-        add_axis(visualizer, o3d, args.no_axis)
+        add_axis(visualizer, o3d, args)
         visualizer.run()
     finally:
         visualizer.destroy_window()
@@ -169,7 +202,7 @@ def open_live(args: argparse.Namespace) -> int:
     received = 0
     report_started = time.perf_counter()
     configure_window(visualizer, args)
-    add_axis(visualizer, o3d, args.no_axis)
+    add_axis(visualizer, o3d, args)
     print(f"Waiting for {args.topic!r} at {args.endpoint}; press Q or Esc to close")
     try:
         while visualizer.poll_events():
@@ -186,6 +219,7 @@ def open_live(args: argparse.Namespace) -> int:
                 continue
 
             points, colors = decode_zmq_message(latest, topic)
+            points = transform_points_for_display(points, args.flip_axis)
             if len(points) == 0:
                 continue
             cloud.points = o3d.utility.Vector3dVector(points)
@@ -214,6 +248,8 @@ def main() -> int:
     args = parse_args()
     if args.point_size <= 0.0:
         raise ValueError("--point-size must be positive")
+    if args.axis_size <= 0.0:
+        raise ValueError("--axis-size must be positive")
     if args.width <= 0 or args.height <= 0:
         raise ValueError("Window dimensions must be positive")
     background = np.asarray(args.background)

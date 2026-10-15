@@ -48,6 +48,7 @@ two calls sequentially before merging the clouds.
 | `TRT_BENCHMARK_RESULTS.json` | Machine-readable results for every case |
 | `TRT_RESOLUTION_BENCHMARK_RESULTS.json` | One/two-camera capture-resolution sweep |
 | `sample_one_zed_15000.ply` | Example 15,000-point RGB cloud |
+| `pointcloud_samples/*.ply` | One raw 15,000-point sample per ZED capture resolution |
 
 ## Requirements
 
@@ -344,6 +345,52 @@ preserve the same near-depth range; that further increases memory and latency.
 
 ## 3D point-cloud viewer
 
+The viewer shows a coordinate frame by default: **X is red, Y is green, and Z
+is blue**. Use `--axis-size` to change its size in metres.
+
+Four raw camera-frame samples are included:
+
+| ZED capture mode | Saved point cloud |
+|---|---|
+| VGA, 672x376 | `pointcloud_samples/one_zed_vga_15000.ply` |
+| HD720, 1280x720 | `pointcloud_samples/one_zed_hd720_15000.ply` |
+| HD1080, 1920x1080 | `pointcloud_samples/one_zed_hd1080_15000.ply` |
+| HD2K, 2208x1242 | `pointcloud_samples/one_zed_hd2k_15000.ply` |
+
+Open the HD1080 sample with a one-metre coordinate frame:
+
+```bash
+python streamer/view_point_cloud.py \
+  file streamer/pointcloud_samples/one_zed_hd1080_15000.ply \
+  --axis-size 1.0
+```
+
+The raw ZED optical frame is `+X` right, `+Y` down, and `+Z` forward. The old
+VR publishing pipeline reflected X before transmission. To compare that legacy
+orientation without changing the PLY file, add the display-only option:
+
+```bash
+python streamer/view_point_cloud.py \
+  file streamer/pointcloud_samples/one_zed_hd1080_15000.ply \
+  --axis-size 1.0 \
+  --flip-axis x
+```
+
+For the actual VR stream, use the streamer's `--flip-x` option instead:
+
+```bash
+python streamer/Streamer_real_one_cam.py \
+  --engine-dir output \
+  --resolution HD1080 \
+  --camera-fps 30 \
+  --max-points 15000 \
+  --flip-x
+```
+
+`--flip-axis x` changes only the viewer display. `--flip-x` changes streamed
+and newly saved coordinates, and also makes bounding-box coordinates use the
+reflected output frame.
+
 Open the sample included in the repository:
 
 ```bash
@@ -487,6 +534,7 @@ python streamer/Streamer_real_one_cam.py \
 | `--bbox-filter` | disabled | Enable the axis-aligned 3D box |
 | `--bbox-min X Y Z` | required when enabled | Minimum output-frame corner |
 | `--bbox-max X Y Z` | required when enabled | Maximum output-frame corner |
+| `--flip-x` | disabled | Reflect output X for the legacy VR coordinate convention |
 | `--remove-invisible` | enabled | Reject correspondences outside the right image |
 | `--random-seed` | 0 | Reproducible point sampling |
 

@@ -561,6 +561,7 @@ class StreamRateLogger:
         max_points: int,
         voxel_size: float,
         bbox_filter: bool,
+        flip_x: bool,
     ) -> dict[str, int | float | str | bool]:
         if self.total_frames == 0:
             raise RuntimeError("Cannot summarize an empty stream")
@@ -574,6 +575,7 @@ class StreamRateLogger:
             "camera_count": camera_count,
             "elapsed_s": round(elapsed, 4),
             "frames": self.total_frames,
+            "flip_x": flip_x,
             "inference_mean_ms": round(float(inference.mean()), 4),
             "inference_p95_ms": round(float(np.percentile(inference, 95)), 4),
             "max_points": max_points,
@@ -687,6 +689,12 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
                 "identity for an unregistered FPS test."
             )
         ),
+    )
+    parser.add_argument(
+        "--flip-x",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Reflect output X for compatibility with the legacy VR stream",
     )
     if camera_count == 2:
         parser.add_argument(
@@ -815,9 +823,14 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _validate_args(parser, args, camera_count)
     transforms = _resolve_transforms(parser, args.transform, camera_count)
+    if args.flip_x:
+        reflection = np.eye(4, dtype=np.float64)
+        reflection[0, 0] = -1.0
+        transforms = [reflection @ transform for transform in transforms]
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     logging.info("Segmentation enabled: %s", SEGMENTATION_ENABLED)
+    logging.info("Legacy VR X reflection: %s", args.flip_x)
     if args.bbox_filter:
         logging.info("Bounding-box filter: min=%s max=%s", args.bbox_min, args.bbox_max)
     else:
@@ -913,6 +926,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     max_points=args.max_points,
                     voxel_size=args.voxel_size,
                     bbox_filter=args.bbox_filter,
+                    flip_x=args.flip_x,
                 )
                 logging.info("BENCHMARK_RESULT %s", json.dumps(result, sort_keys=True))
                 return 0
