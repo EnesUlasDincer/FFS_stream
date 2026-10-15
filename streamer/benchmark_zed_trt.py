@@ -44,11 +44,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-runs", type=int, default=3)
     parser.add_argument("--base-port", type=int, default=16600)
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--suite",
+        choices=("all", "resolution"),
+        default="all",
+        help="Benchmark matrix to run (default: all)",
+    )
     parser.add_argument("--output-json", type=Path)
     return parser.parse_args()
 
 
-def build_cases(include_two_camera: bool) -> list[BenchmarkCase]:
+def build_resolution_cases(include_two_camera: bool) -> list[BenchmarkCase]:
+    cases = [
+        BenchmarkCase("one_vga_100fps_15k", 1, "VGA", 100, 15_000),
+        BenchmarkCase("one_hd720_60fps_15k", 1, "HD720", 60, 15_000),
+        BenchmarkCase("one_hd1080_30fps_15k", 1, "HD1080", 30, 15_000),
+        BenchmarkCase("one_hd2k_15fps_15k", 1, "HD2K", 15, 15_000),
+    ]
+    if include_two_camera:
+        cases.extend(
+            [
+                BenchmarkCase("two_vga_100fps_15k", 2, "VGA", 100, 15_000),
+                BenchmarkCase("two_hd720_60fps_15k", 2, "HD720", 60, 15_000),
+                BenchmarkCase("two_hd1080_30fps_15k", 2, "HD1080", 30, 15_000),
+                BenchmarkCase("two_hd2k_15fps_15k", 2, "HD2K", 15, 15_000),
+            ]
+        )
+    return cases
+
+
+def build_cases(
+    include_two_camera: bool,
+    suite: str = "all",
+) -> list[BenchmarkCase]:
+    if suite == "resolution":
+        return build_resolution_cases(include_two_camera)
+
     cases = [
         BenchmarkCase("one_vga_30fps_15k", 1, "VGA", 30, 15_000),
         BenchmarkCase("one_vga_60fps_15k", 1, "VGA", 60, 15_000),
@@ -181,11 +212,15 @@ def main() -> int:
     if args.warmup_runs < 0:
         raise ValueError("--warmup-runs cannot be negative")
 
-    cases = build_cases(include_two_camera=len(args.serial) == 2)
+    cases = build_cases(
+        include_two_camera=len(args.serial) == 2,
+        suite=args.suite,
+    )
     results = [run_case(case, args, index) for index, case in enumerate(cases)]
     document = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "frames_per_case": args.frames,
+        "suite": args.suite,
         "results": results,
     }
     encoded = json.dumps(document, indent=2, sort_keys=True) + "\n"

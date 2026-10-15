@@ -46,6 +46,7 @@ two calls sequentially before merging the clouds.
 | `benchmark_zed_trt.py` | Reproducible parameter-matrix runner |
 | `TRT_BENCHMARK.md` | Hardware, methodology, results, and conclusions |
 | `TRT_BENCHMARK_RESULTS.json` | Machine-readable results for every case |
+| `TRT_RESOLUTION_BENCHMARK_RESULTS.json` | One/two-camera capture-resolution sweep |
 | `sample_one_zed_15000.ply` | Example 15,000-point RGB cloud |
 
 ## Requirements
@@ -188,6 +189,16 @@ There are two independent resolutions:
 The camera modes now include `VGA`, `HD720`, `HD1080`, and `HD2K`. This tested
 command opens HD2K capture at 2208x1242/15 FPS:
 
+| `--resolution` | Camera pixels | Maximum supported `--camera-fps` |
+|---|---:|---:|
+| `VGA` | 672x376 | 100 |
+| `HD720` | 1280x720 | 60 |
+| `HD1080` | 1920x1080 | 30 |
+| `HD2K` | 2208x1242 | 15 |
+
+Use one of the listed rates for that resolution. These are capture dimensions;
+the current `output` TensorRT engines still infer at their static 448x640 input.
+
 ```bash
 python streamer/Streamer_real_one_cam.py \
   --serial <SERIAL> \
@@ -297,6 +308,33 @@ python streamer/benchmark_zed_trt.py \
   --frames 180 \
   --output-json streamer/TRT_BENCHMARK_RESULTS.json
 ```
+
+Run only the capture-resolution sweep for both cameras:
+
+```bash
+python streamer/benchmark_zed_trt.py \
+  --serial <SERIAL_1> \
+  --serial <SERIAL_2> \
+  --engine-dir output \
+  --suite resolution \
+  --frames 180 \
+  --warmup-runs 3 \
+  --output-json streamer/TRT_RESOLUTION_BENCHMARK_RESULTS.json
+```
+
+The measured RTX 5080 results use 15,000 points, identity transforms, and no
+bounding-box or voxel filter:
+
+| Capture | One camera | Two cameras |
+|---|---:|---:|
+| VGA/100 | 88.62 FPS | 42.74 FPS |
+| HD720/60 | 59.84 FPS | 37.15 FPS |
+| HD1080/30 | 29.66 FPS | 28.80 FPS |
+| HD2K/15 | 15.11 FPS | 15.06 FPS |
+
+The one-camera VGA result can vary between runs because this is a complete
+live-camera pipeline, not a TensorRT-only microbenchmark. See
+[`TRT_BENCHMARK.md`](TRT_BENCHMARK.md) for latency columns and interpretation.
 
 Each subprocess stops deterministically after `--benchmark-frames`, prints a
 `BENCHMARK_RESULT` JSON record, releases its camera, and starts the next case.

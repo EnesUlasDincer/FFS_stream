@@ -5,7 +5,9 @@ camera rate, capture resolution, output point count, bounding-box filtering,
 voxel filtering, and the number of cameras. It was recorded on 2026-10-15.
 
 Exact machine-readable measurements are available in
-[`TRT_BENCHMARK_RESULTS.json`](TRT_BENCHMARK_RESULTS.json).
+[`TRT_BENCHMARK_RESULTS.json`](TRT_BENCHMARK_RESULTS.json). The separate
+capture-resolution sweep is in
+[`TRT_RESOLUTION_BENCHMARK_RESULTS.json`](TRT_RESOLUTION_BENCHMARK_RESULTS.json).
 
 ## Test system
 
@@ -62,6 +64,30 @@ before treating these numbers as final deployment measurements.
 
 The standalone demo pair ran one TensorRT inference in 8.43 ms, or 118.6 FPS,
 without camera capture, cloud construction, or streaming.
+
+## Capture-resolution sweep
+
+This second run holds the output at 15,000 points, disables both spatial
+filters, and uses the maximum supported camera rate for every selectable ZED
+mode. Each case processes 180 frames with the existing static 448x640 TensorRT
+engines.
+
+| Cameras | Capture pixels | Requested FPS | Stream FPS | Inference mean / p95 | Cloud mean / p95 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | VGA (672x376) | 100 | 88.62 | 8.62 / 9.20 ms | 2.04 / 2.29 ms |
+| 1 | HD720 (1280x720) | 60 | 59.84 | 10.06 / 10.67 ms | 2.04 / 2.24 ms |
+| 1 | HD1080 (1920x1080) | 30 | 29.66 | 10.97 / 11.97 ms | 2.08 / 2.25 ms |
+| 1 | HD2K (2208x1242) | 15 | 15.11 | 12.02 / 13.54 ms | 2.09 / 2.35 ms |
+| 2 | VGA (672x376) | 100 | 42.74 | 17.73 / 18.31 ms | 4.50 / 4.88 ms |
+| 2 | HD720 (1280x720) | 60 | 37.15 | 19.56 / 20.46 ms | 4.69 / 5.05 ms |
+| 2 | HD1080 (1920x1080) | 30 | 28.80 | 21.30 / 22.88 ms | 4.63 / 4.94 ms |
+| 2 | HD2K (2208x1242) | 15 | 15.06 | 23.65 / 25.93 ms | 4.47 / 4.85 ms |
+
+Higher capture resolution increases image transfer and resize latency, visible
+in the inference-stage timing. HD1080 and HD2K are camera-rate-limited. They do
+not improve disparity detail with the current engine because every input is
+resized to 448x640 before inference; rebuild the engine at a larger static size
+when higher model resolution is required.
 
 ## Findings
 
@@ -138,6 +164,20 @@ python streamer/benchmark_zed_trt.py \
 
 Providing one serial runs only the one-camera cases. Providing two serials also
 runs the two-camera cases.
+
+To reproduce only the eight capture-resolution cases above, add
+`--suite resolution` and write them to a separate file:
+
+```bash
+python streamer/benchmark_zed_trt.py \
+  --serial <SERIAL_1> \
+  --serial <SERIAL_2> \
+  --engine-dir output \
+  --suite resolution \
+  --frames 180 \
+  --warmup-runs 3 \
+  --output-json streamer/TRT_RESOLUTION_BENCHMARK_RESULTS.json
+```
 
 ## Run one custom case
 
