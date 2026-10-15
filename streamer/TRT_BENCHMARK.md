@@ -25,6 +25,7 @@ and the 30k sweep is in
 | Native ZED depth | disabled |
 | Segmentation | disabled |
 | Transform | identity |
+| XYZ scale | 1.0 (historical runs, before the 2.0 default) |
 | ZMQ | publisher enabled; no subscriber during measurements |
 
 TensorRT warned that the existing plans were created on a different GPU model.
@@ -45,6 +46,9 @@ before treating these numbers as final deployment measurements.
 - The p95 column is the 95th-percentile per-frame latency.
 - Two-camera identity clouds were intentionally unregistered for throughput
   testing.
+- These published measurements used unscaled XYZ (`--xyz-scale 1`). Current
+  streaming and benchmark commands default to `--xyz-scale 2`, and new JSON
+  results record the scale explicitly.
 
 ## Parameter matrix
 
@@ -184,6 +188,7 @@ python streamer/benchmark_zed_trt.py \
   --engine-dir output \
   --frames 180 \
   --warmup-runs 3 \
+  --xyz-scale 1 \
   --output-json streamer/TRT_BENCHMARK_RESULTS.json
 ```
 
@@ -201,6 +206,7 @@ python streamer/benchmark_zed_trt.py \
   --suite resolution \
   --frames 180 \
   --warmup-runs 3 \
+  --xyz-scale 1 \
   --output-json streamer/TRT_RESOLUTION_BENCHMARK_RESULTS.json
 ```
 
@@ -214,6 +220,7 @@ python streamer/benchmark_zed_trt.py \
   --suite resolution-30k \
   --frames 180 \
   --warmup-runs 3 \
+  --xyz-scale 1 \
   --output-json streamer/TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json
 ```
 

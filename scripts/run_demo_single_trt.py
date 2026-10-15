@@ -225,7 +225,13 @@ if __name__ == '__main__':
                         help='Generate and save point cloud')
     parser.add_argument('--zfar', type=float, default=100,
                         help='Max depth (m) to include in point cloud')
+    parser.add_argument('--xyz-scale', '--xyz_scale', dest='xyz_scale',
+                        type=float, default=2.0,
+                        help='Uniform saved/visualized point-cloud XYZ scale')
     args = parser.parse_args()
+
+    if not np.isfinite(args.xyz_scale) or args.xyz_scale <= 0:
+        parser.error('--xyz-scale must be a positive finite number')
 
     set_logging_format()
     set_seed(0)
@@ -322,8 +328,11 @@ if __name__ == '__main__':
         pts = np.asarray(pcd.points)
         keep = (pts[:, 2] > 0) & (pts[:, 2] <= args.zfar)
         pcd = pcd.select_by_index(np.where(keep)[0])
+        pcd.scale(args.xyz_scale, center=np.zeros(3))
         o3d.io.write_point_cloud(f'{args.out_dir}/cloud.ply', pcd)
-        logging.info(f'Point cloud saved to {args.out_dir}')
+        logging.info(
+            f'Point cloud saved to {args.out_dir} '
+            f'with XYZ scale {args.xyz_scale:g}')
 
         if args.denoise_cloud:
             logging.info('Denoising point cloud...')

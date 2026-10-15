@@ -45,6 +45,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-runs", type=int, default=2)
     parser.add_argument("--z-max", type=float, default=100.0)
     parser.add_argument(
+        "--xyz-scale",
+        type=float,
+        default=2.0,
+        help="Uniform scale applied to saved/visualized point-cloud XYZ (default: 2.0)",
+    )
+    parser.add_argument(
         "--remove-invisible",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -111,6 +117,8 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.warmup_runs < 0:
         raise ValueError("--warmup-runs cannot be negative")
+    if not np.isfinite(args.xyz_scale) or args.xyz_scale <= 0.0:
+        raise ValueError("--xyz-scale must be a positive finite number")
 
     engine_dir = args.engine_dir.expanduser().resolve()
     config, height, width = load_engine_config(engine_dir)
@@ -175,8 +183,13 @@ def main() -> int:
         keep = np.isfinite(points).all(axis=1)
         keep &= (points[:, 2] > 0.0) & (points[:, 2] <= args.z_max)
         cloud = cloud.select_by_index(np.flatnonzero(keep))
+        cloud.scale(args.xyz_scale, center=np.zeros(3))
         o3d.io.write_point_cloud(str(args.out_dir / "cloud.ply"), cloud)
-        logging.info("Saved point cloud to %s", args.out_dir / "cloud.ply")
+        logging.info(
+            "Saved point cloud to %s with XYZ scale %.6g",
+            args.out_dir / "cloud.ply",
+            args.xyz_scale,
+        )
 
         if args.visualize:
             o3d.visualization.draw_geometries([cloud])

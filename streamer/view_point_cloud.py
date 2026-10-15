@@ -38,6 +38,15 @@ def add_view_arguments(parser: argparse.ArgumentParser) -> None:
         default=[],
         help="Display-only axis reflection; repeat to flip multiple axes",
     )
+    parser.add_argument(
+        "--display-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Display-only uniform XYZ scale (default: 1.0). This does not "
+            "modify a saved PLY or the live stream."
+        ),
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,13 +126,15 @@ def print_cloud_stats(points: np.ndarray) -> None:
 def transform_points_for_display(
     points: np.ndarray,
     flipped_axes: Sequence[str],
+    display_scale: float = 1.0,
 ) -> np.ndarray:
-    """Apply optional display-only reflections without modifying saved data."""
+    """Apply optional display-only scale/reflections without modifying saved data."""
 
     axes = set(flipped_axes)
-    if not axes:
+    if not axes and display_scale == 1.0:
         return points
     transformed = points.copy()
+    transformed *= display_scale
     for name, column in (("x", 0), ("y", 1), ("z", 2)):
         if name in axes:
             transformed[:, column] *= -1.0
@@ -152,9 +163,12 @@ def open_file(args: argparse.Namespace) -> int:
     points = np.asarray(cloud.points)
     if len(points) == 0:
         raise RuntimeError(f"No points could be read from {path}")
-    points = transform_points_for_display(points, args.flip_axis)
-    if args.flip_axis:
+    points = transform_points_for_display(points, args.flip_axis, args.display_scale)
+    if args.flip_axis or args.display_scale != 1.0:
         cloud.points = o3d.utility.Vector3dVector(points)
+    if args.display_scale != 1.0:
+        print(f"Display-only XYZ scale: {args.display_scale:g}")
+    if args.flip_axis:
         print(f"Display-only flipped axes: {', '.join(sorted(set(args.flip_axis)))}")
     print_cloud_stats(points)
     if args.headless:
@@ -219,7 +233,11 @@ def open_live(args: argparse.Namespace) -> int:
                 continue
 
             points, colors = decode_zmq_message(latest, topic)
-            points = transform_points_for_display(points, args.flip_axis)
+            points = transform_points_for_display(
+                points,
+                args.flip_axis,
+                args.display_scale,
+            )
             if len(points) == 0:
                 continue
             cloud.points = o3d.utility.Vector3dVector(points)
@@ -250,6 +268,8 @@ def main() -> int:
         raise ValueError("--point-size must be positive")
     if args.axis_size <= 0.0:
         raise ValueError("--axis-size must be positive")
+    if not np.isfinite(args.display_scale) or args.display_scale <= 0.0:
+        raise ValueError("--display-scale must be a positive finite number")
     if args.width <= 0 or args.height <= 0:
         raise ValueError("Window dimensions must be positive")
     background = np.asarray(args.background)

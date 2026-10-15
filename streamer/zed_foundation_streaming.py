@@ -572,6 +572,7 @@ class StreamRateLogger:
         voxel_size: float,
         bbox_filter: bool,
         flip_x: bool,
+        xyz_scale: float,
     ) -> dict[str, int | float | str | bool]:
         if self.total_frames == 0:
             raise RuntimeError("Cannot summarize an empty stream")
@@ -597,6 +598,7 @@ class StreamRateLogger:
             "segmentation": SEGMENTATION_ENABLED,
             "stream_fps": round(self.total_frames / elapsed, 4),
             "voxel_size_m": voxel_size,
+            "xyz_scale": xyz_scale,
         }
 
 
@@ -705,6 +707,15 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Reflect output X to match the real-world/legacy VR convention (default: on)",
+    )
+    parser.add_argument(
+        "--xyz-scale",
+        type=float,
+        default=2.0,
+        help=(
+            "Uniformly scale output XYZ and transform translations after depth "
+            "back-projection (default: 2.0; use 1.0 for the original metric scale)"
+        ),
     )
     if camera_count == 2:
         parser.add_argument(
@@ -816,6 +827,8 @@ def _validate_args(
         parser.error("--warmup-runs cannot be negative")
     if args.camera_fps <= 0:
         parser.error("--camera-fps must be positive")
+    if not np.isfinite(args.xyz_scale) or args.xyz_scale <= 0.0:
+        parser.error("--xyz-scale must be a positive finite number")
     if args.benchmark_frames < 0:
         parser.error("--benchmark-frames cannot be negative")
     if not (0.0 < args.z_min < args.z_max):
@@ -838,14 +851,16 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _validate_args(parser, args, camera_count)
     transforms = _resolve_transforms(parser, args.transform, camera_count)
-    if args.flip_x:
-        reflection = np.eye(4, dtype=np.float64)
-        reflection[0, 0] = -1.0
-        transforms = [reflection @ transform for transform in transforms]
+    output_adjustment = np.eye(4, dtype=np.float64)
+    output_adjustment[0, 0] = -args.xyz_scale if args.flip_x else args.xyz_scale
+    output_adjustment[1, 1] = args.xyz_scale
+    output_adjustment[2, 2] = args.xyz_scale
+    transforms = [output_adjustment @ transform for transform in transforms]
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     logging.info("Segmentation enabled: %s", SEGMENTATION_ENABLED)
     logging.info("Legacy VR X reflection: %s", args.flip_x)
+    logging.info("XYZ output scale: %.6g", args.xyz_scale)
     if args.bbox_filter:
         logging.info("Bounding-box filter: min=%s max=%s", args.bbox_min, args.bbox_max)
     else:
@@ -950,6 +965,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     voxel_size=args.voxel_size,
                     bbox_filter=args.bbox_filter,
                     flip_x=args.flip_x,
+                    xyz_scale=args.xyz_scale,
                 )
                 logging.info("BENCHMARK_RESULT %s", json.dumps(result, sort_keys=True))
                 return 0

@@ -99,6 +99,11 @@
           Point size
           <input id="point-size" type="range" min="0.001" max="0.02" step="0.001" value="0.006" />
         </label>
+        <label>
+          Display scale
+          <input id="display-scale" type="range" min="0.25" max="2" step="0.25" value="1" />
+          <span id="display-scale-value">1×</span>
+        </label>
         <button id="reset" type="button">Reset view</button>
       </div>
     </header>
@@ -115,7 +120,8 @@
           <span class="y">green = +Y</span>,
           <span class="z">blue = +Z</span>.<br />
           X is reflected to match the verified real-world/legacy VR convention.
-          Units are metres; segmentation and spatial filters are disabled.
+          Stored XYZ already uses the calibrated 2× scale. The display-scale
+          control is temporary; segmentation and spatial filters are disabled.
           RGB references match the 30k captures; 15k is the same scene at a
           nearby timestamp.
         </p>
@@ -131,6 +137,8 @@
       const selector = document.querySelector("#sample");
       const rgbReference = document.querySelector("#rgb-reference");
       const pointSize = document.querySelector("#point-size");
+      const displayScale = document.querySelector("#display-scale");
+      const displayScaleValue = document.querySelector("#display-scale-value");
       const reset = document.querySelector("#reset");
 
       const scene = new THREE.Scene();
@@ -162,14 +170,16 @@
 
       function fitCamera() {
         if (!lastSphere) return;
-        const radius = Math.max(lastSphere.radius, 0.2);
-        controls.target.copy(lastSphere.center);
+        const scale = Number(displayScale.value);
+        const center = lastSphere.center.clone().multiplyScalar(scale);
+        const radius = Math.max(lastSphere.radius * scale, 0.2);
+        controls.target.copy(center);
         camera.position.set(
-          lastSphere.center.x,
-          lastSphere.center.y,
-          lastSphere.center.z - radius * 2.6,
+          center.x,
+          center.y,
+          center.z - radius * 2.6,
         );
-        camera.lookAt(lastSphere.center);
+        camera.lookAt(center);
         controls.update();
       }
 
@@ -194,6 +204,7 @@
               sizeAttenuation: true,
             });
             cloud = new THREE.Points(geometry, material);
+            cloud.scale.setScalar(Number(displayScale.value));
             scene.add(cloud);
             fitCamera();
             const count = geometry.getAttribute("position").count;
@@ -210,6 +221,12 @@
       selector.addEventListener("change", loadSelected);
       pointSize.addEventListener("input", () => {
         if (cloud) cloud.material.size = Number(pointSize.value);
+      });
+      displayScale.addEventListener("input", () => {
+        const scale = Number(displayScale.value);
+        displayScaleValue.textContent = `${scale}×`;
+        if (cloud) cloud.scale.setScalar(scale);
+        fitCamera();
       });
       reset.addEventListener("click", fitCamera);
       window.addEventListener("resize", resize);

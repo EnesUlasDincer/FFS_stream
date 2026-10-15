@@ -20,7 +20,7 @@ resize to the configured static TensorRT input and scale intrinsics
 feature_runner.engine -> Triton GWC volume -> post_runner.engine
         |
         v
-disparity -> metric XYZ + left RGB -> bounding box/sample/merge
+disparity -> metric XYZ + left RGB -> output XYZ scale -> bounding box/sample/merge
         |
         +--------------------+
         |                    |
@@ -44,11 +44,12 @@ two calls sequentially before merging the clouds.
 | `zed_foundation_streaming.py` | Capture, TensorRT, projection, ZMQ, PLY, and metrics |
 | `view_point_cloud.py` | Saved-PLY and live-ZMQ Open3D viewer |
 | `benchmark_zed_trt.py` | Reproducible parameter-matrix runner |
+| `save_zed_pointcloud_variants.py` | One-camera resolution/point-count/scale capture sweep |
 | `TRT_BENCHMARK.md` | Hardware, methodology, results, and conclusions |
 | `TRT_BENCHMARK_RESULTS.json` | Machine-readable results for every case |
 | `TRT_RESOLUTION_BENCHMARK_RESULTS.json` | One/two-camera capture-resolution sweep |
 | `TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json` | One/two-camera 30k resolution sweep |
-| `sample_one_zed_15000.ply` | Example 15,000-point RGB cloud |
+| `sample_one_zed_15000.ply` | Example 15,000-point RGB cloud at 2x XYZ scale |
 | `pointcloud_samples/` | Interactive viewer, RGB references, and 15k/30k PLY samples |
 
 ## Requirements
@@ -87,6 +88,7 @@ conda activate ffs
 | `--resolution` | ZED capture resolution | `VGA` for speed |
 | `--camera-fps` | Requested capture-rate ceiling | `100` at VGA |
 | `--max-points` | Output density versus speed | `15000` balanced, `5000` fastest |
+| `--xyz-scale` | Uniform output geometry scale | `2.0` (current calibrated VR default) |
 | `--voxel-size` | CPU voxel filter | `0` for real time |
 | `--transform` | Camera 2 to camera 1 extrinsic matrix | Required for real merging |
 | `--port` | ZMQ publisher port | `5555` |
@@ -113,13 +115,33 @@ python streamer/Streamer_real_one_cam.py \
   --engine-dir output \
   --resolution VGA \
   --camera-fps 100 \
-  --max-points 15000
+  --max-points 15000 \
+  --xyz-scale 2
 ```
 
 Press `Ctrl+C` to stop it. Segmentation, voxel filtering, and bounding-box
 filtering are disabled. Output X is reflected by default to match the verified
 real-world/legacy VR convention; use `--no-flip-x` only for raw ZED optical
 coordinates.
+
+### Control the XYZ scale
+
+The streamer now uniformly doubles X, Y, and Z by default because that matches
+the current real-world/VR calibration. The scale is applied after each
+camera-to-output transform, so transform translations are doubled too:
+
+```bash
+# Current default: twice the original point-cloud size
+python streamer/Streamer_real_one_cam.py --xyz-scale 2
+
+# Original unscaled geometry
+python streamer/Streamer_real_one_cam.py --xyz-scale 1
+```
+
+Scaling happens before bounding-box filtering, voxel filtering, PLY saving, and
+ZMQ publishing. Therefore `--bbox-min`, `--bbox-max`, and `--voxel-size` are
+interpreted in the final scaled output coordinate system. Raw depth rejection
+with `--z-min`/`--z-max` still happens before scaling.
 
 ### Select a specific camera
 
@@ -268,7 +290,8 @@ python streamer/Streamer_real_one_cam.py \
 In raw ZED optical coordinates, X points right, Y points down, and Z points
 forward. Because the default output reflects X, default bounding-box X is the
 verified real-world/VR X direction. With camera transforms, the box is evaluated
-in the final merged and reflected output frame.
+in the final merged, reflected, and scaled output frame. With the default
+`--xyz-scale 2`, bounding-box coordinates therefore use the doubled output.
 
 Disable it by omitting the option or explicitly using:
 
@@ -357,7 +380,8 @@ is blue**. Use `--axis-size` to change its size in metres.
 [Open the interactive browser viewer](https://raw.githack.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/pointcloud_samples/index.html).
 It switches between every 15k/30k colored PLY, shows the native RGB reference
 captured with each 30k cloud, and supports mouse orbit, pan, zoom, point sizing,
-and view reset. Each 15k file is a separate capture of the same scene.
+display scaling, and view reset. Each 15k file is a separate capture of the
+same scene. Repository PLY samples use `--xyz-scale 2`.
 The [sample README](pointcloud_samples/README.md) also renders the four RGB
 references directly on GitHub.
 
@@ -376,6 +400,16 @@ Open the HD1080 sample with a one-metre coordinate frame:
 python streamer/view_point_cloud.py \
   file streamer/pointcloud_samples/one_zed_hd1080_15000.ply \
   --axis-size 1.0
+```
+
+The viewer can apply a temporary scale without changing a PLY or live stream.
+This is useful for comparison; do not add `--display-scale 2` when the streamer
+already used `--xyz-scale 2` unless a total 4x display scale is wanted:
+
+```bash
+python streamer/view_point_cloud.py \
+  file output_clouds/unscaled.ply \
+  --display-scale 2
 ```
 
 The raw ZED optical frame is `+X` right, `+Y` down, and `+Z` forward. Testing
@@ -450,7 +484,33 @@ python streamer/Streamer_real_one_cam.py \
   --save-first-rgb output_clouds/first_cloud_rgb.png
 ```
 
-Coordinates are stored in metres and colors as 8-bit RGB.
+Coordinates are stored as floating-point output units and colors as 8-bit RGB.
+At `--xyz-scale 2`, each coordinate is twice its original metric value.
+
+### Save many variants for later comparison
+
+The variant saver captures every selected resolution × point count × XYZ scale
+as an exact-frame PLY/PNG pair and updates `manifest.json` in the output
+directory. For example, this creates eight pairs (two resolutions, two point
+counts, and two scale factors):
+
+```bash
+python streamer/save_zed_pointcloud_variants.py \
+  --serial <SERIAL> \
+  --engine-dir output \
+  --output-dir output_clouds/variants \
+  --resolution VGA \
+  --resolution HD1080 \
+  --max-points 15000 \
+  --max-points 30000 \
+  --xyz-scale 1 \
+  --xyz-scale 2
+```
+
+Omit all three repeatable variant options to capture VGA, HD720, HD1080, and
+HD2K at 15k and 30k points using scale 2. Existing pairs are protected; pass
+`--overwrite` only when they should be replaced. Use `--dry-run` to inspect all
+commands without opening the camera.
 
 ## Benchmark
 
@@ -461,8 +521,13 @@ python streamer/benchmark_zed_trt.py \
   --serial <SERIAL_1> \
   --serial <SERIAL_2> \
   --frames 180 \
+  --xyz-scale 2 \
   --output-json streamer/TRT_BENCHMARK_RESULTS.json
 ```
+
+New benchmark runs record `xyz_scale` in both the top-level document and every
+case. The published benchmark tables below predate the scaling option and used
+the equivalent of `--xyz-scale 1`; they remain historical timing records.
 
 Run only the capture-resolution sweep for both cameras:
 
@@ -570,6 +635,7 @@ python streamer/Streamer_real_one_cam.py \
 | `--bbox-max X Y Z` | required when enabled | Maximum output-frame corner |
 | `--flip-x` | enabled | Reflect output X for the verified real-world/VR convention |
 | `--no-flip-x` | — | Keep raw ZED optical X instead |
+| `--xyz-scale` | 2.0 | Uniformly scale final XYZ and transform translations; `1` restores the original size |
 | `--save-first-rgb PATH` | disabled | Save camera 1's matching native rectified RGB image |
 | `--remove-invisible` | enabled | Reject correspondences outside the right image |
 | `--random-seed` | 0 | Reproducible point sampling |
@@ -585,7 +651,7 @@ frames:
 
 1. UTF-8 topic `PointCloud`
 2. little-endian `uint32` point count
-3. packed `(N, 3)` little-endian `int16` XYZ in millimetres
+3. packed `(N, 3)` little-endian `int16` XYZ at 1000 output units per metre
 4. packed `(N, 3)` `uint8` RGB
 
 UDP discovery remains compatible on port `5556`. Change both ports with
@@ -606,8 +672,15 @@ builds the GWC volume with the Triton CUDA kernel, and then executes
 Run the standalone TensorRT example with:
 
 ```bash
-python scripts_v2/run_demo_tensorrt.py --engine-dir output
+python scripts_v2/run_demo_tensorrt.py \
+  --engine-dir output \
+  --xyz-scale 2
 ```
+
+All tracked demo scripts that save point clouds now accept `--xyz-scale` (or
+the legacy-compatible `--xyz_scale` spelling) and default to 2. Use scale 1 to
+reproduce their original output size. Their saved `depth_meter.npy` remains
+unscaled metric depth; the scale affects only saved/visualized XYZ geometry.
 
 ## Notes and troubleshooting
 

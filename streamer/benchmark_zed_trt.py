@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shlex
 import subprocess
 import sys
@@ -44,6 +45,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-runs", type=int, default=3)
     parser.add_argument("--base-port", type=int, default=16600)
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--xyz-scale",
+        type=float,
+        default=2.0,
+        help="Uniform point-cloud XYZ scale passed to every case (default: 2.0)",
+    )
     parser.add_argument(
         "--suite",
         choices=("all", "resolution", "resolution-30k"),
@@ -167,6 +174,8 @@ def build_command(
         str(case.max_points),
         "--voxel-size",
         str(case.voxel_size),
+        "--xyz-scale",
+        str(args.xyz_scale),
         "--benchmark-frames",
         str(args.frames),
         "--warmup-runs",
@@ -237,6 +246,8 @@ def main() -> int:
         raise ValueError("--frames must be positive")
     if args.warmup_runs < 0:
         raise ValueError("--warmup-runs cannot be negative")
+    if not math.isfinite(args.xyz_scale) or args.xyz_scale <= 0.0:
+        raise ValueError("--xyz-scale must be a positive finite number")
 
     cases = build_cases(
         include_two_camera=len(args.serial) == 2,
@@ -247,6 +258,7 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "frames_per_case": args.frames,
         "suite": args.suite,
+        "xyz_scale": args.xyz_scale,
         "results": results,
     }
     encoded = json.dumps(document, indent=2, sort_keys=True) + "\n"

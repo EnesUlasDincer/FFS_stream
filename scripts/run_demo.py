@@ -38,7 +38,13 @@ if __name__=="__main__":
   parser.add_argument('--valid_iters', type=int, default=8, help='number of flow-field updates during forward pass')
   parser.add_argument('--max_disp', type=int, default=192, help='maximum disparity')
   parser.add_argument('--zfar', type=float, default=100, help="max depth to include in point cloud")
+  parser.add_argument(
+    '--xyz-scale', '--xyz_scale', dest='xyz_scale', type=float, default=2.0,
+    help='uniform saved/visualized point-cloud XYZ scale')
   args = parser.parse_args()
+
+  if not np.isfinite(args.xyz_scale) or args.xyz_scale <= 0:
+    parser.error('--xyz-scale must be a positive finite number')
 
   set_logging_format()
   set_seed(0)
@@ -124,8 +130,9 @@ if __name__=="__main__":
     keep_mask = (np.asarray(pcd.points)[:,2]>0) & (np.asarray(pcd.points)[:,2]<=args.zfar)
     keep_ids = np.arange(len(np.asarray(pcd.points)))[keep_mask]
     pcd = pcd.select_by_index(keep_ids)
+    pcd.scale(args.xyz_scale, center=np.zeros(3))
     o3d.io.write_point_cloud(f'{args.out_dir}/cloud.ply', pcd)
-    logging.info(f"PCL saved to {args.out_dir}")
+    logging.info(f"PCL saved to {args.out_dir} with XYZ scale {args.xyz_scale:g}")
 
     if args.denoise_cloud:
       logging.info("[Optional step] denoise point cloud...")
