@@ -49,8 +49,9 @@ two calls sequentially before merging the clouds.
 | `TRT_BENCHMARK_RESULTS.json` | Machine-readable results for every case |
 | `TRT_RESOLUTION_BENCHMARK_RESULTS.json` | One/two-camera capture-resolution sweep |
 | `TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json` | One/two-camera 30k resolution sweep |
+| `TRT_RESOLUTION_POINT_MATRIX_RESULTS.json` | Measured 48-case, 5k-50k resolution/camera-count sweep |
 | `sample_one_zed_15000.ply` | Example 15,000-point RGB cloud at 1.5x XYZ scale |
-| `pointcloud_samples/` | Interactive viewer, sample manifest, RGB references, and 15k/30k PLY samples |
+| `pointcloud_samples/` | Interactive website, RGB references, and four-resolution 5k-50k PLY matrix |
 
 ## Requirements
 
@@ -118,8 +119,8 @@ python streamer/view_point_cloud.py live \
   --point-size 2.0
 ```
 
-Save all eight standard PLY/RGB variants—four resolutions at 15k and 30k
-points—using scale 1.5:
+Save the complete 24-variant matrix—four resolutions at 5k, 10k, 20k, 30k,
+40k, and 50k points—using scale 1.5:
 
 ```bash
 python streamer/save_zed_pointcloud_variants.py \
@@ -128,8 +129,10 @@ python streamer/save_zed_pointcloud_variants.py \
   --output-dir output_clouds/scale_1p5
 ```
 
-The variant command selects valid maximum camera rates automatically. Add
-`--overwrite` only when replacing files already in that output directory.
+The variant command selects valid maximum camera rates automatically. It saves
+an exact-frame RGB image beside each PLY and updates a manifest for later
+comparison. Add `--overwrite` only when replacing files already in that output
+directory; use `--dry-run` first to preview all 24 commands.
 
 Stream two cameras with the same scale for an unregistered FPS test:
 
@@ -430,22 +433,26 @@ preserve the same near-depth range; that further increases memory and latency.
 The viewer shows a coordinate frame by default: **X is red, Y is green, and Z
 is blue**. Use `--axis-size` to change its size in metres.
 
-[Open the interactive browser viewer](https://raw.githack.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/pointcloud_samples/index.html).
-It switches between every 15k/30k colored PLY, shows the native RGB reference
-captured with each 30k cloud, and supports mouse orbit, pan, zoom, point sizing,
-display scaling, and view reset. Each 15k file is a separate capture of the
-same scene. Repository PLY samples use `--xyz-scale 1.5`.
+[Open the interactive browser explorer](https://raw.githack.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/pointcloud_samples/index.html).
+It reads `manifest.json` and switches between VGA, HD720, HD1080, and HD2K at
+5k, 10k, 15k, 20k, 30k, 40k, and 50k points. It shows the native RGB reference,
+RGB axes, capture metadata, point-size and display-scale controls, auto-rotation,
+fullscreen, a download link for the selected PLY, and the measured one-/two-
+camera FPS for every requested density. The 30k PLY and RGB are an exact-frame
+pair; other densities are separate captures of the same scene.
+Repository PLY samples use `--xyz-scale 1.5`.
 The [sample README](pointcloud_samples/README.md) also renders the four RGB
 references directly on GitHub.
 
-Corrected 15k and 30k samples are included:
+Corrected samples are included for the six requested point limits, plus the
+existing 15k comparison:
 
 | ZED capture mode | RGB | Point clouds |
 |---|---|---|
-| VGA, 672x376 | `one_zed_vga_rgb.png` | `one_zed_vga_15000.ply`, `one_zed_vga_30000.ply` |
-| HD720, 1280x720 | `one_zed_hd720_rgb.png` | `one_zed_hd720_15000.ply`, `one_zed_hd720_30000.ply` |
-| HD1080, 1920x1080 | `one_zed_hd1080_rgb.png` | `one_zed_hd1080_15000.ply`, `one_zed_hd1080_30000.ply` |
-| HD2K, 2208x1242 | `one_zed_hd2k_rgb.png` | `one_zed_hd2k_15000.ply`, `one_zed_hd2k_30000.ply` |
+| VGA, 672x376 | `one_zed_vga_rgb.png` | `one_zed_vga_{5000,10000,15000,20000,30000,40000,50000}.ply` |
+| HD720, 1280x720 | `one_zed_hd720_rgb.png` | `one_zed_hd720_{5000,10000,15000,20000,30000,40000,50000}.ply` |
+| HD1080, 1920x1080 | `one_zed_hd1080_rgb.png` | `one_zed_hd1080_{5000,10000,15000,20000,30000,40000,50000}.ply` |
+| HD2K, 2208x1242 | `one_zed_hd2k_rgb.png` | `one_zed_hd2k_{5000,10000,15000,20000,30000,40000,50000}.ply` |
 
 Open the HD1080 sample with a one-metre coordinate frame:
 
@@ -545,8 +552,8 @@ At `--xyz-scale 1.5`, each coordinate is 1.5 times its original metric value.
 
 The variant saver captures every selected resolution × point count × XYZ scale
 as an exact-frame PLY/PNG pair and updates `manifest.json` in the output
-directory. For example, this creates eight pairs (two resolutions, two point
-counts, and two scale factors):
+directory. For example, this creates six pairs (two resolutions and three
+point counts at scale 1.5):
 
 ```bash
 python streamer/save_zed_pointcloud_variants.py \
@@ -555,16 +562,17 @@ python streamer/save_zed_pointcloud_variants.py \
   --output-dir output_clouds/variants \
   --resolution VGA \
   --resolution HD1080 \
-  --max-points 15000 \
+  --max-points 5000 \
   --max-points 30000 \
-  --xyz-scale 1 \
+  --max-points 50000 \
   --xyz-scale 1.5
 ```
 
 Omit all three repeatable variant options to capture VGA, HD720, HD1080, and
-HD2K at 15k and 30k points using scale 1.5. Existing pairs are protected; pass
-`--overwrite` only when they should be replaced. Use `--dry-run` to inspect all
-commands without opening the camera.
+HD2K at 5k, 10k, 20k, 30k, 40k, and 50k points using scale 1.5. That is 24
+PLY/RGB pairs. Existing pairs are protected; pass `--overwrite` only when they
+should be replaced. Use `--dry-run` to inspect all commands without opening the
+camera. `--capture-retries 3` is the default for transient camera-open errors.
 
 ## Benchmark
 
@@ -595,6 +603,41 @@ python streamer/benchmark_zed_trt.py \
   --warmup-runs 3 \
   --output-json streamer/TRT_RESOLUTION_BENCHMARK_RESULTS.json
 ```
+
+Run every requested point limit at every resolution:
+
+```bash
+python streamer/benchmark_zed_trt.py \
+  --serial <SERIAL_1> \
+  --serial <SERIAL_2> \
+  --engine-dir output \
+  --suite resolution-points \
+  --frames 180 \
+  --warmup-runs 3 \
+  --xyz-scale 1.5 \
+  --output-json streamer/TRT_RESOLUTION_POINT_MATRIX_RESULTS.json
+```
+
+The `resolution-points` suite evaluates 5k, 10k, 20k, 30k, 40k, and 50k at
+VGA, HD720, HD1080, and HD2K. One serial runs 24 cases; two serials run those
+24 one-camera cases plus 24 two-camera cases. Omit the second `--serial` for a
+one-camera-only evaluation.
+
+Measured stream FPS on the RTX 5080 test machine is shown as one camera / two
+cameras. Every case used 180 frames, scale 1.5, X reflection on, segmentation
+off, and no box or voxel filter:
+
+| Points | VGA/100 | HD720/60 | HD1080/30 | HD2K/15 |
+|---:|---:|---:|---:|---:|
+| 5k | 95.24 / 46.31 | 60.33 / 39.74 | 29.64 / 29.13 | 15.23 / 15.09 |
+| 10k | 91.05 / 44.77 | 60.30 / 37.95 | 29.34 / 29.23 | 15.07 / 15.09 |
+| 20k | 85.52 / 41.04 | 59.83 / 35.62 | 29.57 / 29.35 | 15.11 / 14.91 |
+| 30k | 80.38 / 38.91 | 60.09 / 33.70 | 29.78 / 28.56 | 15.13 / 15.04 |
+| 40k | 76.47 / 38.13 | 60.04 / 32.99 | 29.20 / 28.77 | 15.13 / 15.02 |
+| 50k | 74.71 / 36.45 | 59.89 / 31.26 | 29.78 / 27.27 | 15.18 / 14.88 |
+
+See [`TRT_RESOLUTION_POINT_MATRIX_RESULTS.json`](TRT_RESOLUTION_POINT_MATRIX_RESULTS.json)
+for inference and point-cloud mean/p95 timings for every case.
 
 The measured RTX 5080 results use 15,000 points, identity transforms, and no
 bounding-box or voxel filter:

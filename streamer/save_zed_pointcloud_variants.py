@@ -15,6 +15,7 @@ import math
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -29,6 +30,7 @@ DEFAULT_CAMERA_FPS = {
     "HD1080": 30,
     "HD2K": 15,
 }
+DEFAULT_POINT_LIMITS = (5_000, 10_000, 20_000, 30_000, 40_000, 50_000)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -54,7 +56,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--max-points",
         action="append",
         type=int,
-        help="Point limit to capture; repeat as needed (default: 15000 and 30000)",
+        help=(
+            "Point limit to capture; repeat as needed "
+            "(default: 5000, 10000, 20000, 30000, 40000, and 50000)"
+        ),
     )
     parser.add_argument(
         "--xyz-scale",
@@ -73,6 +78,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--warmup-runs", type=int, default=2)
     parser.add_argument("--base-port", type=int, default=17900)
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--capture-retries",
+        type=int,
+        default=3,
+        help="Attempts per variant for transient ZED open failures (default: 3)",
+    )
     parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -159,7 +170,7 @@ def build_command(
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    point_limits = args.max_points or [15_000, 30_000]
+    point_limits = args.max_points or DEFAULT_POINT_LIMITS
     scales = args.xyz_scale or [1.5]
     if any(limit <= 0 for limit in point_limits):
         raise ValueError("Every --max-points value must be positive")
@@ -173,6 +184,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--base-port must be between 1 and 65534")
     if args.timeout <= 0.0:
         raise ValueError("--timeout must be positive")
+    if args.capture_retries <= 0:
+        raise ValueError("--capture-retries must be positive")
 
 
 def read_existing_manifest(path: Path) -> list[dict[str, Any]]:
@@ -196,7 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     validate_args(args)
     resolutions = unique(args.resolution or list(DEFAULT_CAMERA_FPS))
-    point_limits = unique(args.max_points or [15_000, 30_000])
+    point_limits = unique(args.max_points or DEFAULT_POINT_LIMITS)
     scales = unique(args.xyz_scale or [1.5])
     combinations = list(itertools.product(resolutions, point_limits, scales))
     if args.base_port + len(combinations) * 2 - 1 > 65535:
@@ -245,15 +258,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             continue
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        completed = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=args.timeout,
-            check=False,
-        )
+        completed: subprocess.CompletedProcess[str] | None = None
+        for attempt in range(1, args.capture_retries + 1):
+            completed = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=args.timeout,
+                check=False,
+            )
+            if completed.returncode == 0:
+                break
+            if attempt < args.capture_retries:
+                print(
+                    f"  Capture attempt {attempt} failed; retrying in 3 seconds",
+                    flush=True,
+                )
+                time.sleep(3.0)
+        assert completed is not None
         if completed.returncode != 0:
             tail = "\n".join(completed.stdout.splitlines()[-30:])
             raise RuntimeError(f"{stem} failed with code {completed.returncode}:\n{tail}")

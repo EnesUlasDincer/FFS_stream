@@ -3,70 +3,150 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fast-FoundationStereo ZED point clouds</title>
+    <meta name="description" content="Interactive Fast-FoundationStereo ZED RGB point-cloud samples" />
+    <title>Fast-FoundationStereo ZED point-cloud explorer</title>
     <style>
       :root {
         color-scheme: dark;
         font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-        background: #080b10;
-        color: #eef3fb;
+        background: #070a0f;
+        color: #edf4ff;
       }
       * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; }
+      body {
+        display: flex;
+        min-height: 100vh;
+        margin: 0;
+        flex-direction: column;
+        background: #070a0f;
+      }
       header {
         display: flex;
         flex-wrap: wrap;
-        gap: 1rem;
+        gap: 1rem 1.5rem;
         align-items: center;
-        padding: 0.9rem 1.1rem;
-        background: #111722;
-        border-bottom: 1px solid #263246;
+        justify-content: space-between;
+        padding: 0.85rem 1.1rem;
+        background: linear-gradient(120deg, #111a28, #0d1320);
+        border-bottom: 1px solid #26364d;
       }
-      header h1 { margin: 0; font-size: 1.05rem; }
-      .controls { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: center; }
-      label { display: flex; gap: 0.4rem; align-items: center; color: #b9c7da; }
+      .brand h1 { margin: 0; font-size: 1.08rem; }
+      .brand p {
+        margin: 0.2rem 0 0;
+        color: #8fa5c2;
+        font-size: 0.75rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+        align-items: center;
+      }
+      label {
+        display: flex;
+        gap: 0.4rem;
+        align-items: center;
+        color: #bdcbe0;
+        font-size: 0.88rem;
+      }
       select, button, input {
-        color: #eef3fb;
-        background: #1a2433;
-        border: 1px solid #34445d;
-        border-radius: 0.35rem;
-        padding: 0.35rem 0.5rem;
+        color: #eef5ff;
+        background: #172235;
+        border: 1px solid #37506f;
+        border-radius: 0.42rem;
+        padding: 0.38rem 0.55rem;
+      }
+      select:focus, button:focus, input:focus {
+        outline: 2px solid #5ea3ff;
+        outline-offset: 1px;
       }
       button { cursor: pointer; }
+      button:hover { background: #22334d; }
+      input[type="range"] { width: 7rem; padding: 0; }
       main {
         display: grid;
-        grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-        height: calc(100vh - 66px);
+        flex: 1;
+        min-height: 0;
+        grid-template-columns: minmax(0, 2.2fr) minmax(290px, 1fr);
       }
-      #canvas-wrap { position: relative; min-height: 420px; }
+      #canvas-wrap {
+        position: relative;
+        min-height: 440px;
+        overflow: hidden;
+      }
       #canvas-wrap canvas { display: block; width: 100%; height: 100%; }
       #status {
         position: absolute;
         left: 0.8rem;
         bottom: 0.8rem;
-        padding: 0.45rem 0.6rem;
-        border-radius: 0.35rem;
-        background: rgb(5 8 12 / 78%);
-        color: #cbd8ea;
+        max-width: calc(100% - 1.6rem);
+        padding: 0.5rem 0.65rem;
+        border: 1px solid rgb(85 113 151 / 45%);
+        border-radius: 0.42rem;
+        background: rgb(5 9 15 / 82%);
+        color: #d0deef;
         font-size: 0.82rem;
+        backdrop-filter: blur(8px);
+      }
+      #scale-badge {
+        position: absolute;
+        top: 0.8rem;
+        left: 0.8rem;
+        padding: 0.35rem 0.55rem;
+        border: 1px solid #355276;
+        border-radius: 999px;
+        background: rgb(17 29 47 / 84%);
+        color: #86baff;
+        font-size: 0.78rem;
       }
       aside {
         padding: 1rem;
         overflow: auto;
-        background: #0d121b;
-        border-left: 1px solid #263246;
+        background: #0c121c;
+        border-left: 1px solid #26364d;
       }
       aside h2 { margin: 0 0 0.7rem; font-size: 1rem; }
-      #rgb-reference { width: 100%; height: auto; border: 1px solid #34445d; }
-      .legend { line-height: 1.65; color: #b9c7da; }
-      .x { color: #ff595e; }
-      .y { color: #75e06f; }
-      .z { color: #5a91ff; }
-      code { color: #d5e5ff; }
-      @media (max-width: 850px) {
-        main { grid-template-columns: 1fr; height: auto; }
+      #rgb-reference {
+        width: 100%;
+        height: auto;
+        border: 1px solid #344b69;
+        border-radius: 0.45rem;
+        background: #070a0f;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.55rem;
+        margin: 0.8rem 0;
+      }
+      .stat {
+        padding: 0.62rem;
+        border: 1px solid #263a54;
+        border-radius: 0.45rem;
+        background: #111a28;
+      }
+      .stat span { display: block; color: #8197b4; font-size: 0.7rem; }
+      .stat strong { display: block; margin-top: 0.18rem; font-size: 0.92rem; }
+      .legend { line-height: 1.6; color: #aebdd2; font-size: 0.88rem; }
+      .x { color: #ff6268; }
+      .y { color: #7fe57a; }
+      .z { color: #6ba0ff; }
+      .links { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+      .links a {
+        padding: 0.4rem 0.58rem;
+        border: 1px solid #31527a;
+        border-radius: 0.4rem;
+        color: #9ec9ff;
+        text-decoration: none;
+        font-size: 0.82rem;
+      }
+      .links a:hover { background: #17263a; }
+      @media (max-width: 900px) {
+        main { display: block; }
         #canvas-wrap { height: 62vh; }
-        aside { border-left: 0; border-top: 1px solid #263246; }
+        aside { border-top: 1px solid #26364d; border-left: 0; }
       }
     </style>
     <script type="importmap">
@@ -80,51 +160,60 @@
   </head>
   <body>
     <header>
-      <h1>ZED + Fast-FoundationStereo RGB point clouds</h1>
+      <div class="brand">
+        <h1>ZED + Fast-FoundationStereo point-cloud explorer</h1>
+        <p id="sample-count">Loading sample manifest…</p>
+      </div>
       <div class="controls">
-        <label>
-          Sample
-          <select id="sample">
-            <option value="one_zed_vga_15000.ply" data-rgb="one_zed_vga_rgb.png">VGA · 15k</option>
-            <option value="one_zed_vga_30000.ply" data-rgb="one_zed_vga_rgb.png">VGA · 30k</option>
-            <option value="one_zed_hd720_15000.ply" data-rgb="one_zed_hd720_rgb.png">HD720 · 15k</option>
-            <option value="one_zed_hd720_30000.ply" data-rgb="one_zed_hd720_rgb.png">HD720 · 30k</option>
-            <option value="one_zed_hd1080_15000.ply" data-rgb="one_zed_hd1080_rgb.png">HD1080 · 15k</option>
-            <option value="one_zed_hd1080_30000.ply" data-rgb="one_zed_hd1080_rgb.png" selected>HD1080 · 30k</option>
-            <option value="one_zed_hd2k_15000.ply" data-rgb="one_zed_hd2k_rgb.png">HD2K · 15k</option>
-            <option value="one_zed_hd2k_30000.ply" data-rgb="one_zed_hd2k_rgb.png">HD2K · 30k</option>
-          </select>
-        </label>
+        <label>Resolution <select id="resolution" disabled></select></label>
+        <label>Points <select id="point-count" disabled></select></label>
         <label>
           Point size
           <input id="point-size" type="range" min="0.001" max="0.02" step="0.001" value="0.006" />
+          <span id="point-size-value">0.006</span>
         </label>
         <label>
           Display scale
           <input id="display-scale" type="range" min="0.25" max="2" step="0.25" value="1" />
           <span id="display-scale-value">1×</span>
         </label>
+        <label><input id="auto-rotate" type="checkbox" /> Auto rotate</label>
         <button id="reset" type="button">Reset view</button>
+        <button id="fullscreen" type="button">Fullscreen</button>
       </div>
     </header>
     <main>
       <section id="canvas-wrap">
-        <div id="status">Loading…</div>
+        <div id="scale-badge">Stored XYZ scale: 1.5×</div>
+        <div id="status" role="status">Loading…</div>
       </section>
       <aside>
         <h2>Rectified left RGB reference</h2>
         <img id="rgb-reference" alt="Native-resolution rectified ZED RGB reference" />
+        <div class="stats">
+          <div class="stat"><span>Capture</span><strong id="capture-stat">—</strong></div>
+          <div class="stat"><span>Cloud points</span><strong id="points-stat">—</strong></div>
+          <div class="stat"><span>Camera rate</span><strong id="fps-stat">—</strong></div>
+          <div class="stat"><span>RGB timing</span><strong id="rgb-stat">—</strong></div>
+          <div class="stat"><span>Measured FPS · 1 cam</span><strong id="one-fps-stat">—</strong></div>
+          <div class="stat"><span>Measured FPS · 2 cams</span><strong id="two-fps-stat">—</strong></div>
+        </div>
         <p class="legend">
           Drag to orbit, right-drag to pan, and scroll to zoom.<br />
           <span class="x">Red = +X</span>,
           <span class="y">green = +Y</span>,
           <span class="z">blue = +Z</span>.<br />
           X is reflected to match the verified real-world/legacy VR convention.
-          Stored XYZ already uses the calibrated 1.5× scale. The display-scale
-          control is temporary; segmentation and spatial filters are disabled.
-          RGB references match the 30k captures; 15k is the same scene at a
-          nearby timestamp.
+          Stored XYZ uses the calibrated 1.5× scale. Display scale is temporary;
+          segmentation and spatial filters are disabled. FPS values come from
+          the 180-frame TensorRT benchmark matrix.
         </p>
+        <div class="links">
+          <a id="download-ply" href="#" download>Download selected PLY</a>
+          <a href="manifest.json">Open manifest</a>
+          <a href="../TRT_RESOLUTION_POINT_MATRIX_RESULTS.json">Benchmark JSON</a>
+          <a href="README.md">Commands and notes</a>
+        </div>
       </aside>
     </main>
     <script type="module">
@@ -132,20 +221,33 @@
       import { OrbitControls } from "three/addons/controls/OrbitControls.js";
       import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
 
+      const resolutionOrder = ["VGA", "HD720", "HD1080", "HD2K"];
       const wrap = document.querySelector("#canvas-wrap");
       const status = document.querySelector("#status");
-      const selector = document.querySelector("#sample");
+      const resolutionSelector = document.querySelector("#resolution");
+      const pointSelector = document.querySelector("#point-count");
       const rgbReference = document.querySelector("#rgb-reference");
       const pointSize = document.querySelector("#point-size");
+      const pointSizeValue = document.querySelector("#point-size-value");
       const displayScale = document.querySelector("#display-scale");
       const displayScaleValue = document.querySelector("#display-scale-value");
+      const autoRotate = document.querySelector("#auto-rotate");
       const reset = document.querySelector("#reset");
+      const fullscreen = document.querySelector("#fullscreen");
+      const downloadPly = document.querySelector("#download-ply");
+      const sampleCount = document.querySelector("#sample-count");
+      const scaleBadge = document.querySelector("#scale-badge");
+      const captureStat = document.querySelector("#capture-stat");
+      const pointsStat = document.querySelector("#points-stat");
+      const fpsStat = document.querySelector("#fps-stat");
+      const rgbStat = document.querySelector("#rgb-stat");
+      const oneFpsStat = document.querySelector("#one-fps-stat");
+      const twoFpsStat = document.querySelector("#two-fps-stat");
 
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x080b10);
+      scene.background = new THREE.Color(0x070a0f);
       const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 100);
       camera.up.set(0, -1, 0);
-
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -153,12 +255,23 @@
 
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
-      const axes = new THREE.AxesHelper(0.75);
-      scene.add(axes);
+      controls.autoRotateSpeed = 1.2;
+      scene.add(new THREE.AxesHelper(0.75));
 
       const loader = new PLYLoader();
+      let variants = [];
+      let benchmarkResults = new Map();
       let cloud = null;
       let lastSphere = null;
+      let loadSequence = 0;
+
+      function formatPoints(value) {
+        return value >= 1000 ? `${value / 1000}k` : String(value);
+      }
+
+      function benchmarkKey(cameraCount, resolution, maxPoints) {
+        return `${cameraCount}:${resolution}:${maxPoints}`;
+      }
 
       function resize() {
         const width = wrap.clientWidth;
@@ -174,23 +287,72 @@
         const center = lastSphere.center.clone().multiplyScalar(scale);
         const radius = Math.max(lastSphere.radius * scale, 0.2);
         controls.target.copy(center);
-        camera.position.set(
-          center.x,
-          center.y,
-          center.z - radius * 2.6,
-        );
+        camera.position.set(center.x, center.y, center.z - radius * 2.6);
         camera.lookAt(center);
         controls.update();
       }
 
+      function selectedVariant() {
+        const resolution = resolutionSelector.value;
+        const points = Number(pointSelector.value);
+        return variants.find(
+          (variant) => variant.resolution === resolution && variant.max_points === points,
+        );
+      }
+
+      function updatePointOptions(preferredPoints = 30000) {
+        const available = variants
+          .filter((variant) => variant.resolution === resolutionSelector.value)
+          .map((variant) => variant.max_points)
+          .sort((a, b) => a - b);
+        pointSelector.replaceChildren(
+          ...available.map((points) => {
+            const option = document.createElement("option");
+            option.value = String(points);
+            option.textContent = formatPoints(points);
+            return option;
+          }),
+        );
+        pointSelector.value = String(
+          available.includes(preferredPoints) ? preferredPoints : available[0],
+        );
+      }
+
       function loadSelected() {
-        const option = selector.selectedOptions[0];
-        const filename = option.value;
-        rgbReference.src = option.dataset.rgb;
-        status.textContent = `Loading ${filename}…`;
+        const variant = selectedVariant();
+        if (!variant) return;
+        const sequence = ++loadSequence;
+        const filename = variant.ply;
+        const rgbFile = variant.rgb_reference || variant.rgb;
+        rgbReference.src = rgbFile;
+        downloadPly.href = filename;
+        captureStat.textContent = variant.resolution;
+        pointsStat.textContent = Number(variant.max_points).toLocaleString();
+        fpsStat.textContent = `${variant.camera_fps} requested`;
+        rgbStat.textContent = variant.rgb_same_frame ? "Exact frame" : "Nearby reference";
+        const oneCamera = benchmarkResults.get(
+          benchmarkKey(1, variant.resolution, variant.max_points),
+        );
+        const twoCamera = benchmarkResults.get(
+          benchmarkKey(2, variant.resolution, variant.max_points),
+        );
+        oneFpsStat.textContent = oneCamera ? oneCamera.stream_fps.toFixed(2) : "Not evaluated";
+        twoFpsStat.textContent = twoCamera ? twoCamera.stream_fps.toFixed(2) : "Not evaluated";
+        oneFpsStat.title = oneCamera
+          ? `TRT ${oneCamera.inference_mean_ms.toFixed(2)} ms · cloud ${oneCamera.pointcloud_mean_ms.toFixed(2)} ms`
+          : "The extra 15k sample is outside the six-density benchmark matrix";
+        twoFpsStat.title = twoCamera
+          ? `TRT ${twoCamera.inference_mean_ms.toFixed(2)} ms · cloud ${twoCamera.pointcloud_mean_ms.toFixed(2)} ms`
+          : "The extra 15k sample is outside the six-density benchmark matrix";
+        status.textContent = `Loading ${variant.resolution} · ${formatPoints(variant.max_points)}…`;
+
         loader.load(
           filename,
           (geometry) => {
+            if (sequence !== loadSequence) {
+              geometry.dispose();
+              return;
+            }
             if (cloud) {
               scene.remove(cloud);
               cloud.geometry.dispose();
@@ -208,7 +370,7 @@
             scene.add(cloud);
             fitCamera();
             const count = geometry.getAttribute("position").count;
-            status.textContent = `${option.textContent} · ${count.toLocaleString()} RGB points`;
+            status.textContent = `${variant.resolution} · ${count.toLocaleString()} RGB points`;
           },
           undefined,
           (error) => {
@@ -218,8 +380,60 @@
         );
       }
 
-      selector.addEventListener("change", loadSelected);
+      async function loadManifest() {
+        try {
+          const [manifestResponse, benchmarkResponse] = await Promise.all([
+            fetch("manifest.json", { cache: "no-cache" }),
+            fetch("../TRT_RESOLUTION_POINT_MATRIX_RESULTS.json", { cache: "no-cache" }),
+          ]);
+          if (!manifestResponse.ok) {
+            throw new Error(`Manifest HTTP ${manifestResponse.status}`);
+          }
+          const manifest = await manifestResponse.json();
+          const benchmark = benchmarkResponse.ok
+            ? await benchmarkResponse.json()
+            : { results: [] };
+          if (!benchmarkResponse.ok) {
+            console.warn(`Benchmark HTTP ${benchmarkResponse.status}`);
+          }
+          variants = manifest.variants;
+          benchmarkResults = new Map(
+            benchmark.results.map((result) => [
+              benchmarkKey(result.camera_count, result.resolution, result.max_points),
+              result,
+            ]),
+          );
+          const resolutions = [...new Set(variants.map((variant) => variant.resolution))]
+            .sort((a, b) => resolutionOrder.indexOf(a) - resolutionOrder.indexOf(b));
+          resolutionSelector.replaceChildren(
+            ...resolutions.map((resolution) => {
+              const option = document.createElement("option");
+              option.value = resolution;
+              option.textContent = resolution;
+              return option;
+            }),
+          );
+          resolutionSelector.value = resolutions.includes("HD1080") ? "HD1080" : resolutions[0];
+          updatePointOptions(30000);
+          resolutionSelector.disabled = false;
+          pointSelector.disabled = false;
+          sampleCount.textContent = `${variants.length} RGB point clouds · ${benchmark.results.length} benchmark cases`;
+          scaleBadge.textContent = `Stored XYZ scale: ${manifest.xyz_scale}×`;
+          loadSelected();
+        } catch (error) {
+          console.error(error);
+          status.textContent = "Could not load manifest.json";
+          sampleCount.textContent = "Manifest unavailable";
+        }
+      }
+
+      resolutionSelector.addEventListener("change", () => {
+        updatePointOptions(Number(pointSelector.value));
+        loadSelected();
+      });
+      pointSelector.addEventListener("change", loadSelected);
       pointSize.addEventListener("input", () => {
+        pointSizeValue.textContent = pointSize.value;
         if (cloud) cloud.material.size = Number(pointSize.value);
       });
       displayScale.addEventListener("input", () => {
@@ -228,7 +442,11 @@
         if (cloud) cloud.scale.setScalar(scale);
         fitCamera();
       });
+      autoRotate.addEventListener("change", () => {
+        controls.autoRotate = autoRotate.checked;
+      });
       reset.addEventListener("click", fitCamera);
+      fullscreen.addEventListener("click", () => wrap.requestFullscreen());
       window.addEventListener("resize", resize);
 
       function animate() {
@@ -238,7 +456,7 @@
       }
 
       resize();
-      loadSelected();
+      loadManifest();
       animate();
     </script>
   </body>

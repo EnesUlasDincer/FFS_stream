@@ -9,6 +9,7 @@ import math
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RESULT_PREFIX = "BENCHMARK_RESULT "
+POINT_COUNT_VARIATIONS = (5_000, 10_000, 20_000, 30_000, 40_000, 50_000)
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-port", type=int, default=16600)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument(
+        "--case-retries",
+        type=int,
+        default=3,
+        help="Attempts per case for transient ZED open failures (default: 3)",
+    )
+    parser.add_argument(
         "--xyz-scale",
         type=float,
         default=1.5,
@@ -53,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--suite",
-        choices=("all", "resolution", "resolution-30k"),
+        choices=("all", "resolution", "resolution-30k", "resolution-points"),
         default="all",
         help="Benchmark matrix to run (default: all)",
     )
@@ -112,6 +120,11 @@ def build_cases(
         return build_resolution_cases(include_two_camera)
     if suite == "resolution-30k":
         return build_resolution_cases(include_two_camera, max_points=30_000)
+    if suite == "resolution-points":
+        cases: list[BenchmarkCase] = []
+        for max_points in POINT_COUNT_VARIATIONS:
+            cases.extend(build_resolution_cases(include_two_camera, max_points))
+        return cases
 
     cases = [
         BenchmarkCase("one_vga_30fps_15k", 1, "VGA", 30, 15_000),
@@ -214,15 +227,26 @@ def run_case(
     printable = ["<SERIAL>" if token in serial_tokens else token for token in command]
     print(f"[{index + 1}] {case.name}", flush=True)
     print("  " + shlex.join(printable), flush=True)
-    completed = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=args.timeout,
-        check=False,
-    )
+    completed: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(1, args.case_retries + 1):
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=args.timeout,
+            check=False,
+        )
+        if completed.returncode == 0:
+            break
+        if attempt < args.case_retries:
+            print(
+                f"  Attempt {attempt} failed; retrying in 3 seconds",
+                flush=True,
+            )
+            time.sleep(3.0)
+    assert completed is not None
     if completed.returncode != 0:
         tail = "\n".join(completed.stdout.splitlines()[-30:])
         raise RuntimeError(f"{case.name} failed with code {completed.returncode}:\n{tail}")
@@ -246,6 +270,8 @@ def main() -> int:
         raise ValueError("--frames must be positive")
     if args.warmup_runs < 0:
         raise ValueError("--warmup-runs cannot be negative")
+    if args.case_retries <= 0:
+        raise ValueError("--case-retries must be positive")
     if not math.isfinite(args.xyz_scale) or args.xyz_scale <= 0.0:
         raise ValueError("--xyz-scale must be a positive finite number")
 

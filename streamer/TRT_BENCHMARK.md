@@ -10,6 +10,8 @@ capture-resolution sweep is in
 [`TRT_RESOLUTION_BENCHMARK_RESULTS.json`](TRT_RESOLUTION_BENCHMARK_RESULTS.json),
 and the 30k sweep is in
 [`TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json`](TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json).
+The complete six-density sweep is in
+[`TRT_RESOLUTION_POINT_MATRIX_RESULTS.json`](TRT_RESOLUTION_POINT_MATRIX_RESULTS.json).
 
 ## Test system
 
@@ -223,6 +225,43 @@ python streamer/benchmark_zed_trt.py \
   --xyz-scale 1 \
   --output-json streamer/TRT_30K_RESOLUTION_BENCHMARK_RESULTS.json
 ```
+
+## Full resolution and point-count matrix
+
+Evaluate all four capture resolutions at every requested output density with:
+
+```bash
+python streamer/benchmark_zed_trt.py \
+  --serial <SERIAL_1> \
+  --serial <SERIAL_2> \
+  --engine-dir output \
+  --suite resolution-points \
+  --frames 180 \
+  --warmup-runs 3 \
+  --xyz-scale 1.5 \
+  --output-json streamer/TRT_RESOLUTION_POINT_MATRIX_RESULTS.json
+```
+
+This suite covers 5k, 10k, 20k, 30k, 40k, and 50k at VGA/100, HD720/60,
+HD1080/30, and HD2K/15. It runs 24 cases with one serial. Supplying a second
+serial adds the corresponding 24 two-camera cases, for 48 total. Use a separate
+output filename so the historical benchmark JSON files remain reproducible.
+
+The completed 48-case run used 180 frames per case, XYZ scale 1.5, X reflection
+enabled, segmentation disabled, and no bounding-box or voxel filter. Each cell
+below is one-camera FPS / two-camera FPS:
+
+| Points | VGA/100 | HD720/60 | HD1080/30 | HD2K/15 |
+|---:|---:|---:|---:|---:|
+| 5k | 95.24 / 46.31 | 60.33 / 39.74 | 29.64 / 29.13 | 15.23 / 15.09 |
+| 10k | 91.05 / 44.77 | 60.30 / 37.95 | 29.34 / 29.23 | 15.07 / 15.09 |
+| 20k | 85.52 / 41.04 | 59.83 / 35.62 | 29.57 / 29.35 | 15.11 / 14.91 |
+| 30k | 80.38 / 38.91 | 60.09 / 33.70 | 29.78 / 28.56 | 15.13 / 15.04 |
+| 40k | 76.47 / 38.13 | 60.04 / 32.99 | 29.20 / 28.77 | 15.13 / 15.02 |
+| 50k | 74.71 / 36.45 | 59.89 / 31.26 | 29.78 / 27.27 | 15.18 / 14.88 |
+
+The JSON contains the inference and point-cloud processing mean/p95 values, so
+the matrix can be replotted without scraping this table.
 
 ## Run one custom case
 

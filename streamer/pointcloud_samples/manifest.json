@@ -1,12 +1,48 @@
 {
   "camera_count": 1,
+  "coordinate_units": "scaled metres",
+  "extra_point_limits": [
+    15000
+  ],
   "flip_x": true,
+  "requested_point_limits": [
+    5000,
+    10000,
+    20000,
+    30000,
+    40000,
+    50000
+  ],
   "segmentation": false,
   "variants": [
     {
       "camera_fps": 100,
+      "max_points": 5000,
+      "ply": "one_zed_vga_5000.ply",
+      "resolution": "VGA",
+      "rgb_reference": "one_zed_vga_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 100,
+      "max_points": 10000,
+      "ply": "one_zed_vga_10000.ply",
+      "resolution": "VGA",
+      "rgb_reference": "one_zed_vga_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 100,
       "max_points": 15000,
       "ply": "one_zed_vga_15000.ply",
+      "resolution": "VGA",
+      "rgb_reference": "one_zed_vga_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 100,
+      "max_points": 20000,
+      "ply": "one_zed_vga_20000.ply",
       "resolution": "VGA",
       "rgb_reference": "one_zed_vga_rgb.png",
       "rgb_same_frame": false
@@ -20,9 +56,49 @@
       "rgb_same_frame": true
     },
     {
+      "camera_fps": 100,
+      "max_points": 40000,
+      "ply": "one_zed_vga_40000.ply",
+      "resolution": "VGA",
+      "rgb_reference": "one_zed_vga_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 100,
+      "max_points": 50000,
+      "ply": "one_zed_vga_50000.ply",
+      "resolution": "VGA",
+      "rgb_reference": "one_zed_vga_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 60,
+      "max_points": 5000,
+      "ply": "one_zed_hd720_5000.ply",
+      "resolution": "HD720",
+      "rgb_reference": "one_zed_hd720_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 60,
+      "max_points": 10000,
+      "ply": "one_zed_hd720_10000.ply",
+      "resolution": "HD720",
+      "rgb_reference": "one_zed_hd720_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
       "camera_fps": 60,
       "max_points": 15000,
       "ply": "one_zed_hd720_15000.ply",
+      "resolution": "HD720",
+      "rgb_reference": "one_zed_hd720_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 60,
+      "max_points": 20000,
+      "ply": "one_zed_hd720_20000.ply",
       "resolution": "HD720",
       "rgb_reference": "one_zed_hd720_rgb.png",
       "rgb_same_frame": false
@@ -36,9 +112,49 @@
       "rgb_same_frame": true
     },
     {
+      "camera_fps": 60,
+      "max_points": 40000,
+      "ply": "one_zed_hd720_40000.ply",
+      "resolution": "HD720",
+      "rgb_reference": "one_zed_hd720_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 60,
+      "max_points": 50000,
+      "ply": "one_zed_hd720_50000.ply",
+      "resolution": "HD720",
+      "rgb_reference": "one_zed_hd720_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 30,
+      "max_points": 5000,
+      "ply": "one_zed_hd1080_5000.ply",
+      "resolution": "HD1080",
+      "rgb_reference": "one_zed_hd1080_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 30,
+      "max_points": 10000,
+      "ply": "one_zed_hd1080_10000.ply",
+      "resolution": "HD1080",
+      "rgb_reference": "one_zed_hd1080_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
       "camera_fps": 30,
       "max_points": 15000,
       "ply": "one_zed_hd1080_15000.ply",
+      "resolution": "HD1080",
+      "rgb_reference": "one_zed_hd1080_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 30,
+      "max_points": 20000,
+      "ply": "one_zed_hd1080_20000.ply",
       "resolution": "HD1080",
       "rgb_reference": "one_zed_hd1080_rgb.png",
       "rgb_same_frame": false
@@ -52,9 +168,49 @@
       "rgb_same_frame": true
     },
     {
+      "camera_fps": 30,
+      "max_points": 40000,
+      "ply": "one_zed_hd1080_40000.ply",
+      "resolution": "HD1080",
+      "rgb_reference": "one_zed_hd1080_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 30,
+      "max_points": 50000,
+      "ply": "one_zed_hd1080_50000.ply",
+      "resolution": "HD1080",
+      "rgb_reference": "one_zed_hd1080_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 15,
+      "max_points": 5000,
+      "ply": "one_zed_hd2k_5000.ply",
+      "resolution": "HD2K",
+      "rgb_reference": "one_zed_hd2k_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 15,
+      "max_points": 10000,
+      "ply": "one_zed_hd2k_10000.ply",
+      "resolution": "HD2K",
+      "rgb_reference": "one_zed_hd2k_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
       "camera_fps": 15,
       "max_points": 15000,
       "ply": "one_zed_hd2k_15000.ply",
+      "resolution": "HD2K",
+      "rgb_reference": "one_zed_hd2k_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 15,
+      "max_points": 20000,
+      "ply": "one_zed_hd2k_20000.ply",
       "resolution": "HD2K",
       "rgb_reference": "one_zed_hd2k_rgb.png",
       "rgb_same_frame": false
@@ -66,6 +222,22 @@
       "resolution": "HD2K",
       "rgb_reference": "one_zed_hd2k_rgb.png",
       "rgb_same_frame": true
+    },
+    {
+      "camera_fps": 15,
+      "max_points": 40000,
+      "ply": "one_zed_hd2k_40000.ply",
+      "resolution": "HD2K",
+      "rgb_reference": "one_zed_hd2k_rgb.png",
+      "rgb_same_frame": false
+    },
+    {
+      "camera_fps": 15,
+      "max_points": 50000,
+      "ply": "one_zed_hd2k_50000.ply",
+      "resolution": "HD2K",
+      "rgb_reference": "one_zed_hd2k_rgb.png",
+      "rgb_same_frame": false
     }
   ],
   "xyz_scale": 1.5
