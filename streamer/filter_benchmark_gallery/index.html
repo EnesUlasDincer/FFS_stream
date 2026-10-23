@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Two-ZED Fast-FoundationStereo filter benchmark gallery" />
+    <title>Two-ZED filter benchmark</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background: #07101b; color: #edf6ff; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #07101b; }
+      header { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between; padding: .9rem 1.1rem; background: #0d1928; border-bottom: 1px solid #29405d; }
+      h1 { margin: 0; font-size: 1.15rem; }
+      header p { margin: .2rem 0 0; color: #88a3c2; font-size: .78rem; }
+      .controls { display: flex; flex-wrap: wrap; gap: .7rem; align-items: center; }
+      label { display: flex; gap: .35rem; align-items: center; color: #bed0e5; font-size: .85rem; }
+      select, input, button { border: 1px solid #395a80; border-radius: .4rem; padding: .38rem .5rem; color: #edf6ff; background: #14243a; }
+      input[type="range"] { width: 7rem; padding: 0; }
+      button { cursor: pointer; }
+      main { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(300px, .8fr); min-height: calc(100vh - 75px); }
+      #viewport { position: relative; min-height: 560px; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #status { position: absolute; left: .8rem; bottom: .8rem; padding: .5rem .7rem; border: 1px solid #395a80; border-radius: .4rem; background: rgb(5 12 22 / 85%); font-size: .82rem; }
+      aside { padding: 1rem; overflow: auto; background: #0a1421; border-left: 1px solid #29405d; }
+      aside h2 { margin: 0 0 .7rem; font-size: 1rem; }
+      #rgb { width: 100%; border: 1px solid #395a80; border-radius: .45rem; }
+      .stats { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; margin: .8rem 0; }
+      .stat { padding: .6rem; border: 1px solid #29405d; border-radius: .4rem; background: #101e30; }
+      .stat span { display: block; color: #88a3c2; font-size: .7rem; }
+      .stat strong { display: block; margin-top: .2rem; font-size: .92rem; }
+      .note { color: #aabdd4; line-height: 1.55; font-size: .85rem; }
+      .links { display: flex; flex-wrap: wrap; gap: .5rem; }
+      a { color: #8fc5ff; }
+      .links a { padding: .4rem .55rem; border: 1px solid #395a80; border-radius: .4rem; text-decoration: none; font-size: .8rem; }
+      @media (max-width: 900px) { main { display: block; } #viewport { height: 62vh; min-height: 420px; } aside { border-left: 0; border-top: 1px solid #29405d; } }
+    </style>
+    <script type="importmap">
+      {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}
+    </script>
+  </head>
+  <body>
+    <header>
+      <div><h1>Two-ZED TensorRT point-cloud benchmark</h1><p>Calibrated fusion · scale 1.5 · segmentation off · 120 frames per case</p></div>
+      <div class="controls">
+        <label>Resolution <select id="resolution"></select></label>
+        <label>Point cap <select id="points"></select></label>
+        <label>Filters <select id="filter"></select></label>
+        <label>Point size <input id="size" type="range" min="0.001" max="0.02" step="0.001" value="0.005" /><span id="size-value">0.005</span></label>
+        <label><input id="rotate" type="checkbox" /> Rotate</label>
+        <button id="reset" type="button">Reset view</button>
+      </div>
+    </header>
+    <main>
+      <section id="viewport"><div id="status">Loading results…</div></section>
+      <aside>
+        <h2>Left-camera RGB reference</h2>
+        <img id="rgb" alt="Rectified left-camera RGB reference" />
+        <div class="stats">
+          <div class="stat"><span>Stream rate</span><strong id="fps">—</strong></div>
+          <div class="stat"><span>Actual points</span><strong id="actual">—</strong></div>
+          <div class="stat"><span>Generated</span><strong id="generated">—</strong></div>
+          <div class="stat"><span>After box</span><strong id="after-bbox">—</strong></div>
+          <div class="stat"><span>After table</span><strong id="after-table">—</strong></div>
+          <div class="stat"><span>Inference</span><strong id="inference">—</strong></div>
+          <div class="stat"><span>Cloud processing</span><strong id="cloud">—</strong></div>
+          <div class="stat"><span>Capture request</span><strong id="capture">—</strong></div>
+          <div class="stat"><span>Filter mode</span><strong id="mode">—</strong></div>
+        </div>
+        <p class="note">Drag to orbit, right-drag to pan, and scroll to zoom. Axes are X red, Y green, and Z blue. “Both” applies the bounding box first, then removes the table, before the final point cap.</p>
+        <div class="links">
+          <a id="download" href="#" download>Download PLY</a>
+          <a href="benchmark_results.json">Results JSON</a>
+          <a href="README.md">Report and commands</a>
+        </div>
+      </aside>
+    </main>
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+
+      const order = ["VGA", "HD720", "HD1080", "HD2K"];
+      const modeLabels = { none: "Filters off", bbox: "Bounding box", table: "Table removed", both: "Box + table" };
+      const viewport = document.querySelector("#viewport");
+      const selectors = { resolution: document.querySelector("#resolution"), points: document.querySelector("#points"), filter: document.querySelector("#filter") };
+      const status = document.querySelector("#status");
+      const size = document.querySelector("#size");
+      const sizeValue = document.querySelector("#size-value");
+      const rotate = document.querySelector("#rotate");
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      viewport.prepend(renderer.domElement);
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x07101b);
+      scene.add(new THREE.AxesHelper(0.65));
+      const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 100);
+      camera.up.set(0, 0, 1);
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.autoRotateSpeed = 1.2;
+      const material = new THREE.PointsMaterial({ size: Number(size.value), vertexColors: true, sizeAttenuation: true });
+      const loader = new PLYLoader();
+      let cloud = null;
+      let results = [];
+
+      function resize() {
+        const width = viewport.clientWidth, height = viewport.clientHeight;
+        renderer.setSize(width, height, false);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+      function resetView(geometry) {
+        geometry.computeBoundingBox();
+        const box = geometry.boundingBox;
+        const center = box.getCenter(new THREE.Vector3());
+        const extent = box.getSize(new THREE.Vector3());
+        const radius = Math.max(extent.x, extent.y, extent.z, .4);
+        controls.target.copy(center);
+        camera.position.set(center.x + radius * 1.25, center.y - radius * 1.6, center.z + radius * .9);
+        camera.near = Math.max(radius / 1000, .001);
+        camera.far = radius * 30;
+        camera.updateProjectionMatrix();
+        controls.update();
+      }
+      function options(select, values, label = value => value) {
+        select.replaceChildren(...values.map(value => {
+          const option = document.createElement("option"); option.value = value; option.textContent = label(value); return option;
+        }));
+      }
+      function current() {
+        return results.find(entry => entry.resolution === selectors.resolution.value && String(entry.max_points) === selectors.points.value && entry.filter_mode === selectors.filter.value);
+      }
+      function loadSelected() {
+        const entry = current();
+        if (!entry) { status.textContent = "This case was not captured."; return; }
+        status.textContent = `Loading ${entry.ply}…`;
+        loader.load(entry.ply, geometry => {
+          if (cloud) { scene.remove(cloud); cloud.geometry.dispose(); }
+          geometry.computeVertexNormals();
+          cloud = new THREE.Points(geometry, material);
+          scene.add(cloud);
+          resetView(geometry);
+          status.textContent = `${entry.resolution} · ${(entry.max_points / 1000).toFixed(0)}K · ${modeLabels[entry.filter_mode]}`;
+        }, undefined, error => { console.error(error); status.textContent = `Could not load ${entry.ply}`; });
+        document.querySelector("#rgb").src = entry.rgb_reference;
+        document.querySelector("#fps").textContent = `${entry.stream_fps.toFixed(2)} FPS`;
+        document.querySelector("#actual").textContent = Math.round(entry.points_mean).toLocaleString();
+        document.querySelector("#generated").textContent = entry.points_generated_mean == null ? "—" : Math.round(entry.points_generated_mean).toLocaleString();
+        document.querySelector("#after-bbox").textContent = entry.points_after_bbox_mean == null ? "—" : Math.round(entry.points_after_bbox_mean).toLocaleString();
+        document.querySelector("#after-table").textContent = entry.points_after_table_mean == null ? "—" : Math.round(entry.points_after_table_mean).toLocaleString();
+        document.querySelector("#inference").textContent = `${entry.inference_mean_ms.toFixed(2)} ms`;
+        document.querySelector("#cloud").textContent = `${entry.pointcloud_mean_ms.toFixed(2)} ms`;
+        document.querySelector("#capture").textContent = `${entry.resolution} @ ${entry.requested_camera_fps}`;
+        document.querySelector("#mode").textContent = modeLabels[entry.filter_mode];
+        document.querySelector("#download").href = entry.ply;
+      }
+      fetch("benchmark_results.json").then(response => response.json()).then(document => {
+        results = document.results;
+        options(selectors.resolution, order.filter(value => results.some(entry => entry.resolution === value)));
+        options(selectors.points, [...new Set(results.map(entry => entry.max_points))].sort((a, b) => a - b), value => `${value / 1000}K`);
+        options(selectors.filter, ["none", "bbox", "table", "both"], value => modeLabels[value]);
+        selectors.resolution.value = results.some(entry => entry.resolution === "HD1080") ? "HD1080" : selectors.resolution.value;
+        selectors.points.value = "50000";
+        selectors.filter.value = "both";
+        loadSelected();
+      }).catch(error => { console.error(error); status.textContent = "Could not load benchmark_results.json"; });
+      Object.values(selectors).forEach(select => select.addEventListener("change", loadSelected));
+      size.addEventListener("input", () => { material.size = Number(size.value); sizeValue.textContent = size.value; });
+      rotate.addEventListener("change", () => { controls.autoRotate = rotate.checked; });
+      document.querySelector("#reset").addEventListener("click", () => cloud && resetView(cloud.geometry));
+      window.addEventListener("resize", resize); resize();
+      renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+    </script>
+  </body>
+</html>

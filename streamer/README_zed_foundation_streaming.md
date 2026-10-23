@@ -330,8 +330,32 @@ multiple matrices, append a dotted key to the filename:
 
 ## Bounding-box filter
 
-The box is disabled by default. Enable it and provide minimum and maximum XYZ
-corners in metres:
+First preview the box in the viewer while the streamer publishes an unfiltered
+cloud. The viewer always shows the coordinate frame (X red, Y green, Z blue)
+and draws the requested box in orange:
+
+```bash
+python streamer/view_point_cloud.py live \
+  --endpoint tcp://127.0.0.1:5555 \
+  --axis-size 0.5 \
+  --point-size 2.0 \
+  --bbox-min -0.5 -0.5 0.2 \
+  --bbox-max  0.5  0.5 2.0
+```
+
+Add `--apply-bbox` to the viewer command to preview only the points inside the
+box. This is display-side filtering and does not slow or change the publisher.
+The terminal reports `inside/total` points once per second. Adjust the six box
+coordinates and restart the viewer until the orange box contains the desired
+workspace.
+
+Do not use viewer-only `--display-scale` or `--flip-axis` while choosing values
+that will be copied to the streamer; those options change only the displayed
+coordinates. The streamer's own `--xyz-scale`, `--flip-x`, and camera transforms
+are already present in the received cloud and therefore remain consistent.
+
+Then copy exactly the same coordinates to the streamer to apply the real
+publisher-side filter:
 
 ```bash
 python streamer/Streamer_real_one_cam.py \
@@ -356,8 +380,85 @@ Disable it by omitting the option or explicitly using:
 ```
 
 `--bbox-min` and `--bbox-max` are required when the filter is enabled. The
-filter must construct and inspect the dense cloud before the final point cap;
-the measured VGA/100, 15k case ran at 37.76 FPS versus 92.79 FPS without it.
+optimized path evaluates each XYZ bound directly during per-camera projection.
+Rejected points never enter the merged point array and never receive an RGB
+float allocation.
+
+The same viewer flags work for saved files:
+
+```bash
+python streamer/view_point_cloud.py \
+  file output_clouds/calibrated_cloud.ply \
+  --axis-size 0.5 \
+  --bbox-min -0.5 -0.5 0.2 \
+  --bbox-max  0.5  0.5 2.0 \
+  --apply-bbox
+```
+
+## Remove the tabletop
+
+Add `--table-filter` to remove the calibrated tabletop and every point below
+it. The filter uses the final streamed coordinate frame, so it runs after the
+camera transform, `--xyz-scale`, `--flip-x`, and bounding-box filter, but before
+voxel filtering and `--max-points`. It therefore works for VR streaming and for
+clouds written with `--save-first-cloud`.
+
+For the current two-ZED calibration, default `--xyz-scale 1.5`, and default
+`--flip-x`, the measured table plane is already the default. This is the
+one-camera command:
+
+```bash
+CALIB=/home/enes/Documents/fast_mail_fork/configs/cameras/calibration/2026-10-24.yaml
+
+python streamer/Streamer_real_one_cam.py \
+  --serial 17008863 \
+  --engine-dir output \
+  --resolution HD1080 \
+  --camera-fps 30 \
+  --transform "${CALIB}:left_cam.extrinsics" \
+  --xyz-scale 1.5 \
+  --flip-x \
+  --bbox-filter \
+  --bbox-min -1.35 -0.70 -0.10 \
+  --bbox-max -0.20 0.60 0.50 \
+  --table-filter \
+  --table-clearance 0.01 \
+  --max-points 30000
+```
+
+For two cameras, use the same filter after both calibrated clouds are merged:
+
+```bash
+CALIB=/home/enes/Documents/fast_mail_fork/configs/cameras/calibration/2026-10-24.yaml
+
+python streamer/Streamer_real_two_cam.py \
+  --serial 17008863 --serial 16055244 \
+  --engine-dir output \
+  --resolution HD1080 \
+  --camera-fps 30 \
+  --transform "${CALIB}:left_cam.extrinsics" \
+  --transform "${CALIB}:right_cam.extrinsics" \
+  --xyz-scale 1.5 \
+  --flip-x \
+  --bbox-filter \
+  --bbox-min -1.35 -0.70 -0.10 \
+  --bbox-max -0.20 0.60 0.50 \
+  --table-filter \
+  --table-clearance 0.01 \
+  --max-points 30000
+```
+
+The calibrated default plane is:
+
+```text
+0.056345*x + 0.010991*y + 0.998351*z - 0.01902 = 0
+```
+
+Only the plane's positive side is retained. Increase `--table-clearance` if a
+thin layer of table points remains; decrease it if the filter trims the bottoms
+of objects. Override the measured plane with `--table-plane A B C D` if the
+camera transforms, XYZ scale, X reflection, or table position changes. Disable
+the filter with `--no-table-filter` or by omitting `--table-filter`.
 
 ## Increasing resolution
 
@@ -730,6 +831,9 @@ python streamer/Streamer_real_one_cam.py \
 | `--bbox-filter` | disabled | Enable the axis-aligned 3D box |
 | `--bbox-min X Y Z` | required when enabled | Minimum output-frame corner |
 | `--bbox-max X Y Z` | required when enabled | Maximum output-frame corner |
+| `--table-filter` | disabled | Remove the calibrated table plane and points below it |
+| `--table-plane A B C D` | calibrated rig | Output-frame plane equation; its positive side is kept |
+| `--table-clearance` | 0.01 m | Extra distance above the table plane to retain |
 | `--flip-x` | enabled | Reflect output X for the verified real-world/VR convention |
 | `--no-flip-x` | — | Keep raw ZED optical X instead |
 | `--xyz-scale` | 1.5 | Uniformly scale final XYZ and transform translations; `1` restores the original size |
@@ -737,9 +841,68 @@ python streamer/Streamer_real_one_cam.py \
 | `--remove-invisible` | enabled | Reject correspondences outside the right image |
 | `--random-seed` | 0 | Reproducible point sampling |
 
-When box and voxel filtering are disabled, the implementation samples valid
-pixels before constructing the complete dense cloud. This early sampling is
-why `--max-points 5000` and `15000` are much faster than unlimited output.
+When voxel filtering is disabled, the implementation applies the bounding box
+and table plane inside each camera's projection and then samples immediately.
+Only the retained samples receive RGB conversion and enter the merged cloud.
+Without spatial filters, sampling happens even earlier, before XYZ projection.
+Voxel filtering still needs all spatially valid points so it can identify the
+occupied voxels correctly.
+
+On a repeatable synthetic 448x640 test using the current calibrated transform,
+bounding box, table plane, and a 30K cap, this reduced median CPU point-cloud
+processing time from 26.34 ms to 6.16 ms (4.28x). End-to-end FPS also includes
+camera capture and TensorRT inference, so measure it on the live cameras with
+`--benchmark-frames`.
+
+Live HD1080/30 benchmarks with the 2026-10-24 calibration, default 1.5 scale,
+X reflection, current bounding box, no voxel filter, and a 30K output cap:
+
+| Cameras | Spatial filters | Stream FPS | Mean inference | Mean cloud |
+|---:|---|---:|---:|---:|
+| 1 | box + table | 29.70 | 10.67 ms | 3.19 ms |
+| 2 | box only | 28.88 | 20.49 ms | 7.82 ms |
+| 2 | box + table | 28.59 | 21.00 ms | 7.24 ms |
+
+The earlier two-camera HD1080 box-filter implementation measured 14.51 FPS in
+the same 30K evaluation series. The optimized box-only result is therefore
+approximately 1.99x faster end to end and nearly reaches the requested camera
+rate.
+
+### Full resolution, density, and filter matrix
+
+The repository also includes a 48-case two-camera matrix covering all four
+capture resolutions, 30K/50K/80K point caps, and filters off/box/table/both.
+Every case has its own downloadable PLY, measured FPS, and matching
+resolution-level RGB reference:
+
+[Open the interactive filter benchmark gallery](https://raw.githack.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/filter_benchmark_gallery/index.html).
+
+Static comparison sheets render directly in the gallery
+[`README.md`](filter_benchmark_gallery/README.md), while exact measurements are
+stored in
+[`benchmark_results.json`](filter_benchmark_gallery/benchmark_results.json).
+
+Reproduce the complete benchmark and capture set with:
+
+```bash
+CALIB=/home/enes/Documents/fast_mail_fork/configs/cameras/calibration/2026-10-24.yaml
+
+python streamer/benchmark_zed_filter_matrix.py \
+  --serial 17008863 --serial 16055244 \
+  --transform "${CALIB}:left_cam.extrinsics" \
+  --transform "${CALIB}:right_cam.extrinsics" \
+  --frames 120 \
+  --overwrite
+```
+
+Use `--resume` instead of `--overwrite` to continue an interrupted matrix. Add
+`--refresh-stage-counts` to update older results with the mean generated,
+after-box, and after-table point counts without rerunning every density cap.
+Regenerate all GitHub-visible PNG comparisons with:
+
+```bash
+python streamer/render_filter_benchmark_previews.py
+```
 
 ## ZMQ wire format
 

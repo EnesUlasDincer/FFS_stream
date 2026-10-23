@@ -47,6 +47,33 @@ def add_view_arguments(parser: argparse.ArgumentParser) -> None:
             "modify a saved PLY or the live stream."
         ),
     )
+    parser.add_argument(
+        "--bbox-min",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        help="Minimum XYZ corner of a displayed wireframe box, in output units",
+    )
+    parser.add_argument(
+        "--bbox-max",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        help="Maximum XYZ corner of a displayed wireframe box, in output units",
+    )
+    parser.add_argument(
+        "--apply-bbox",
+        action="store_true",
+        help="Preview only points inside --bbox-min/--bbox-max",
+    )
+    parser.add_argument(
+        "--bbox-color",
+        nargs=3,
+        type=float,
+        default=(1.0, 0.65, 0.0),
+        metavar=("R", "G", "B"),
+        help="Wireframe box RGB color from 0 to 1 (default: 1 0.65 0)",
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,6 +150,24 @@ def print_cloud_stats(points: np.ndarray) -> None:
     print(f"Maximum XYZ [m]: {maximum}")
 
 
+def bounding_box_mask(points: np.ndarray, args: argparse.Namespace) -> np.ndarray:
+    """Return the points inside the viewer box, including its faces."""
+
+    minimum = np.asarray(args.bbox_min, dtype=np.float64)
+    maximum = np.asarray(args.bbox_max, dtype=np.float64)
+    return np.logical_and(points >= minimum, points <= maximum).all(axis=1)
+
+
+def print_bounding_box_stats(points: np.ndarray, args: argparse.Namespace) -> np.ndarray:
+    """Print box coordinates/count and return its point-membership mask."""
+
+    mask = bounding_box_mask(points, args)
+    print(f"Bounding box minimum XYZ: {np.asarray(args.bbox_min)}")
+    print(f"Bounding box maximum XYZ: {np.asarray(args.bbox_max)}")
+    print(f"Points inside bounding box: {int(mask.sum())}/{len(points)}")
+    return mask
+
+
 def transform_points_for_display(
     points: np.ndarray,
     flipped_axes: Sequence[str],
@@ -153,6 +198,17 @@ def add_axis(visualizer: Any, o3d: Any, args: argparse.Namespace) -> None:
         visualizer.add_geometry(axis, reset_bounding_box=False)
 
 
+def add_bounding_box(visualizer: Any, o3d: Any, args: argparse.Namespace) -> None:
+    if args.bbox_min is None:
+        return
+    box = o3d.geometry.AxisAlignedBoundingBox(
+        min_bound=np.asarray(args.bbox_min, dtype=np.float64),
+        max_bound=np.asarray(args.bbox_max, dtype=np.float64),
+    )
+    box.color = np.asarray(args.bbox_color, dtype=np.float64)
+    visualizer.add_geometry(box, reset_bounding_box=False)
+
+
 def open_file(args: argparse.Namespace) -> int:
     o3d = load_open3d()
     path = args.path.expanduser().resolve()
@@ -171,6 +227,15 @@ def open_file(args: argparse.Namespace) -> int:
     if args.flip_axis:
         print(f"Display-only flipped axes: {', '.join(sorted(set(args.flip_axis)))}")
     print_cloud_stats(points)
+    if args.bbox_min is not None:
+        mask = print_bounding_box_stats(points, args)
+        if args.apply_bbox:
+            points = points[mask]
+            colors = np.asarray(cloud.colors)
+            cloud.points = o3d.utility.Vector3dVector(points)
+            if len(colors) == len(mask):
+                cloud.colors = o3d.utility.Vector3dVector(colors[mask])
+            print(f"Displayed points after bounding-box preview: {len(points)}")
     if args.headless:
         return 0
 
@@ -185,6 +250,7 @@ def open_file(args: argparse.Namespace) -> int:
         configure_window(visualizer, args)
         visualizer.add_geometry(cloud)
         add_axis(visualizer, o3d, args)
+        add_bounding_box(visualizer, o3d, args)
         visualizer.run()
     finally:
         visualizer.destroy_window()
@@ -217,6 +283,10 @@ def open_live(args: argparse.Namespace) -> int:
     report_started = time.perf_counter()
     configure_window(visualizer, args)
     add_axis(visualizer, o3d, args)
+    add_bounding_box(visualizer, o3d, args)
+    if args.bbox_min is not None:
+        print(f"Bounding box minimum XYZ: {np.asarray(args.bbox_min)}")
+        print(f"Bounding box maximum XYZ: {np.asarray(args.bbox_max)}")
     print(f"Waiting for {args.topic!r} at {args.endpoint}; press Q or Esc to close")
     try:
         while visualizer.poll_events():
@@ -238,13 +308,19 @@ def open_live(args: argparse.Namespace) -> int:
                 args.flip_axis,
                 args.display_scale,
             )
-            if len(points) == 0:
-                continue
+            total_points = len(points)
+            inside_points: int | None = None
+            if args.bbox_min is not None:
+                mask = bounding_box_mask(points, args)
+                inside_points = int(mask.sum())
+                if args.apply_bbox:
+                    points = points[mask]
+                    colors = colors[mask]
             cloud.points = o3d.utility.Vector3dVector(points)
             cloud.colors = o3d.utility.Vector3dVector(colors)
             if cloud_added:
                 visualizer.update_geometry(cloud)
-            else:
+            elif len(points) > 0:
                 visualizer.add_geometry(cloud)
                 cloud_added = True
             visualizer.update_renderer()
@@ -252,7 +328,15 @@ def open_live(args: argparse.Namespace) -> int:
             received += 1
             elapsed = time.perf_counter() - report_started
             if elapsed >= 1.0:
-                print(f"Viewer {received / elapsed:.1f} FPS | {len(points)} points")
+                box_report = (
+                    ""
+                    if inside_points is None
+                    else f" | {inside_points}/{total_points} inside box"
+                )
+                print(
+                    f"Viewer {received / elapsed:.1f} FPS | "
+                    f"{len(points)} displayed points{box_report}"
+                )
                 received = 0
                 report_started = time.perf_counter()
     finally:
@@ -275,6 +359,20 @@ def main() -> int:
     background = np.asarray(args.background)
     if not np.logical_and(0.0 <= background, background <= 1.0).all():
         raise ValueError("--background values must be between 0 and 1")
+    bbox_color = np.asarray(args.bbox_color)
+    if not np.logical_and(0.0 <= bbox_color, bbox_color <= 1.0).all():
+        raise ValueError("--bbox-color values must be between 0 and 1")
+    if (args.bbox_min is None) != (args.bbox_max is None):
+        raise ValueError("--bbox-min and --bbox-max must be provided together")
+    if args.apply_bbox and args.bbox_min is None:
+        raise ValueError("--apply-bbox requires --bbox-min and --bbox-max")
+    if args.bbox_min is not None:
+        minimum = np.asarray(args.bbox_min, dtype=np.float64)
+        maximum = np.asarray(args.bbox_max, dtype=np.float64)
+        if not np.isfinite(minimum).all() or not np.isfinite(maximum).all():
+            raise ValueError("bounding-box coordinates must be finite")
+        if np.any(minimum >= maximum):
+            raise ValueError("every --bbox-min value must be smaller than --bbox-max")
     return open_file(args) if args.mode == "file" else open_live(args)
 
 

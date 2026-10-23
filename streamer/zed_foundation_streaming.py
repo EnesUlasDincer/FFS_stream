@@ -45,6 +45,16 @@ from core.foundation_stereo import TrtRunner  # noqa: E402
 # Intentionally not configurable: this streamer never starts segmentation.
 SEGMENTATION_ENABLED: Final[bool] = False
 
+# Plane measured from the calibrated two-ZED rig after the default output
+# adjustment (``--xyz-scale 1.5 --flip-x``). The coefficients describe
+# ``a*x + b*y + c*z + d = 0`` in the final streamed coordinate frame.
+DEFAULT_TABLE_PLANE: Final[tuple[float, float, float, float]] = (
+    0.056345,
+    0.010991,
+    0.998351,
+    -0.01902,
+)
+
 
 @dataclass(frozen=True)
 class CameraCalibration:
@@ -304,8 +314,18 @@ def disparity_to_point_cloud(
     camera_to_output: np.ndarray,
     sample_limit: int = 0,
     rng: np.random.Generator | None = None,
+    bbox_min: np.ndarray | None = None,
+    bbox_max: np.ndarray | None = None,
+    table_normal: np.ndarray | None = None,
+    table_offset: float = 0.0,
+    table_clearance: float = 0.0,
+    stage_counts: dict[str, int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Back-project one disparity map and transform it to the output frame."""
+    """Back-project, transform, spatially filter, and sample one disparity map."""
+
+    if stage_counts is not None:
+        stage_counts.clear()
+        stage_counts.update(generated=0, after_bbox=0, after_table=0)
 
     fx = float(calibration.matrix[0, 0])
     fy = float(calibration.matrix[1, 1])
@@ -317,37 +337,100 @@ def disparity_to_point_cloud(
         u_coordinates = np.arange(disparity.shape[1], dtype=np.float32)[None, :]
         valid &= (u_coordinates - disparity) >= 0.0
 
-    depth = np.zeros_like(disparity, dtype=np.float32)
-    depth[valid] = fx * calibration.baseline_m / disparity[valid]
-    valid &= np.isfinite(depth) & (depth >= z_min) & (depth <= z_max)
-
     rows, columns = np.nonzero(valid)
     if rows.size == 0:
         empty = np.empty((0, 3), dtype=np.float32)
         return empty, empty.copy()
-    if sample_limit > 0 and rows.size > sample_limit:
+
+    z = (fx * calibration.baseline_m / disparity[rows, columns]).astype(
+        np.float32, copy=False
+    )
+    valid_depth = np.isfinite(z) & (z >= z_min) & (z <= z_max)
+    rows = rows[valid_depth]
+    columns = columns[valid_depth]
+    z = z[valid_depth]
+    generated_count = int(rows.size)
+    if stage_counts is not None:
+        stage_counts.update(
+            generated=generated_count,
+            after_bbox=generated_count,
+            after_table=generated_count,
+        )
+    if rows.size == 0:
+        empty = np.empty((0, 3), dtype=np.float32)
+        return empty, empty.copy()
+
+    spatial_filter_enabled = bbox_min is not None or table_normal is not None
+    if not spatial_filter_enabled and sample_limit > 0 and rows.size > sample_limit:
         generator = rng if rng is not None else np.random.default_rng()
         keep = generator.choice(rows.size, sample_limit, replace=False)
         rows = rows[keep]
         columns = columns[keep]
+        z = z[keep]
 
-    z = depth[rows, columns]
     x = (columns.astype(np.float32) - cx) * z / fx
     y = (rows.astype(np.float32) - cy) * z / fy
-    points = np.column_stack((x, y, z)).astype(np.float32, copy=False)
-    colors = left_rgb[rows, columns].astype(np.float32) / 255.0
 
     # Identity is the benchmark/default path. Avoid an unnecessary matrix
     # multiplication when the cloud already uses the requested output frame.
-    if not np.array_equal(camera_to_output, np.eye(4, dtype=camera_to_output.dtype)):
-        rotation = camera_to_output[:3, :3].astype(np.float32)
-        translation = camera_to_output[:3, 3].astype(np.float32)
-        points = points @ rotation.T + translation
+    if np.array_equal(camera_to_output, np.eye(4, dtype=camera_to_output.dtype)):
+        output_x, output_y, output_z = x, y, z
+    else:
+        rotation = camera_to_output[:3, :3].astype(np.float32, copy=False)
+        translation = camera_to_output[:3, 3].astype(np.float32, copy=False)
+        output_x = rotation[0, 0] * x + rotation[0, 1] * y + rotation[0, 2] * z
+        output_y = rotation[1, 0] * x + rotation[1, 1] * y + rotation[1, 2] * z
+        output_z = rotation[2, 0] * x + rotation[2, 1] * y + rotation[2, 2] * z
+        output_x += translation[0]
+        output_y += translation[1]
+        output_z += translation[2]
+
+    if spatial_filter_enabled:
+        spatially_valid = np.ones(rows.size, dtype=bool)
+        if bbox_min is not None and bbox_max is not None:
+            spatially_valid &= (output_x >= bbox_min[0]) & (output_x <= bbox_max[0])
+            spatially_valid &= (output_y >= bbox_min[1]) & (output_y <= bbox_max[1])
+            spatially_valid &= (output_z >= bbox_min[2]) & (output_z <= bbox_max[2])
+        if stage_counts is not None:
+            stage_counts["after_bbox"] = int(np.count_nonzero(spatially_valid))
+        if table_normal is not None:
+            signed_distance = (
+                table_normal[0] * output_x
+                + table_normal[1] * output_y
+                + table_normal[2] * output_z
+                + table_offset
+            )
+            spatially_valid &= signed_distance > table_clearance
+        if stage_counts is not None:
+            stage_counts["after_table"] = int(np.count_nonzero(spatially_valid))
+
+        rows = rows[spatially_valid]
+        columns = columns[spatially_valid]
+        output_x = output_x[spatially_valid]
+        output_y = output_y[spatially_valid]
+        output_z = output_z[spatially_valid]
+
+        # Sampling here avoids constructing and merging dense RGB arrays for
+        # points that will never be published.
+        if sample_limit > 0 and rows.size > sample_limit:
+            generator = rng if rng is not None else np.random.default_rng()
+            keep = generator.choice(rows.size, sample_limit, replace=False)
+            rows = rows[keep]
+            columns = columns[keep]
+            output_x = output_x[keep]
+            output_y = output_y[keep]
+            output_z = output_z[keep]
+
+    points = np.empty((rows.size, 3), dtype=np.float32)
+    points[:, 0] = output_x
+    points[:, 1] = output_y
+    points[:, 2] = output_z
+    colors = left_rgb[rows, columns].astype(np.float32) / 255.0
     return np.ascontiguousarray(points), np.ascontiguousarray(colors)
 
 
 class PointCloudProcessor:
-    """Merges, bounds, downsamples, and caps the streamed cloud."""
+    """Merges, spatially filters, downsamples, and caps the streamed cloud."""
 
     def __init__(
         self,
@@ -355,26 +438,52 @@ class PointCloudProcessor:
         max_points: int,
         bbox_min: np.ndarray | None,
         bbox_max: np.ndarray | None,
+        table_plane: np.ndarray | None,
+        table_clearance: float,
         random_seed: int,
     ) -> None:
         self.voxel_size = voxel_size
         self.max_points = max_points
         self.bbox_min = bbox_min
         self.bbox_max = bbox_max
+        if table_plane is None:
+            self.table_normal = None
+            self.table_offset = 0.0
+        else:
+            plane = np.asarray(table_plane, dtype=np.float32)
+            if plane.shape != (4,) or not np.isfinite(plane).all():
+                raise ValueError("table_plane must contain four finite values")
+            normal_length = float(np.linalg.norm(plane[:3]))
+            if normal_length <= 0.0:
+                raise ValueError("table_plane normal cannot be zero")
+            self.table_normal = plane[:3] / normal_length
+            self.table_offset = float(plane[3] / normal_length)
+        if not np.isfinite(table_clearance) or table_clearance < 0.0:
+            raise ValueError("table_clearance must be a non-negative finite number")
+        self.table_clearance = table_clearance
         self.rng = np.random.default_rng(random_seed)
 
     def process(
-        self, clouds: Sequence[tuple[np.ndarray, np.ndarray]]
+        self,
+        clouds: Sequence[tuple[np.ndarray, np.ndarray]],
+        spatial_filter_applied: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
-        points = np.concatenate([cloud[0] for cloud in clouds], axis=0)
-        colors = np.concatenate([cloud[1] for cloud in clouds], axis=0)
+        if len(clouds) == 1:
+            points, colors = clouds[0]
+        else:
+            points = np.concatenate([cloud[0] for cloud in clouds], axis=0)
+            colors = np.concatenate([cloud[1] for cloud in clouds], axis=0)
 
-        valid = np.isfinite(points).all(axis=1) & np.isfinite(colors).all(axis=1)
-        if self.bbox_min is not None and self.bbox_max is not None:
-            valid &= (points >= self.bbox_min).all(axis=1)
-            valid &= (points <= self.bbox_max).all(axis=1)
-        points = points[valid]
-        colors = colors[valid]
+        if not spatial_filter_applied:
+            valid = np.isfinite(points).all(axis=1) & np.isfinite(colors).all(axis=1)
+            if self.bbox_min is not None and self.bbox_max is not None:
+                valid &= (points >= self.bbox_min).all(axis=1)
+                valid &= (points <= self.bbox_max).all(axis=1)
+            if self.table_normal is not None:
+                signed_distance = points @ self.table_normal + self.table_offset
+                valid &= signed_distance > self.table_clearance
+            points = points[valid]
+            colors = colors[valid]
 
         if self.voxel_size > 0.0 and len(points) > 0:
             voxel_ids = np.floor(points / self.voxel_size).astype(np.int64)
@@ -541,22 +650,39 @@ class StreamRateLogger:
         self.inference_times_ms: list[float] = []
         self.pointcloud_times_ms: list[float] = []
         self.point_counts: list[int] = []
+        self.generated_point_counts: list[int] = []
+        self.after_bbox_point_counts: list[int] = []
+        self.after_table_point_counts: list[int] = []
 
-    def update(self, points: int, inference_ms: float, pointcloud_ms: float) -> None:
+    def update(
+        self,
+        points: int,
+        inference_ms: float,
+        pointcloud_ms: float,
+        generated_points: int,
+        after_bbox_points: int,
+        after_table_points: int,
+    ) -> None:
         self.interval_frames += 1
         self.total_frames += 1
         self.inference_times_ms.append(inference_ms)
         self.pointcloud_times_ms.append(pointcloud_ms)
         self.point_counts.append(points)
+        self.generated_point_counts.append(generated_points)
+        self.after_bbox_point_counts.append(after_bbox_points)
+        self.after_table_point_counts.append(after_table_points)
         now = time.perf_counter()
         elapsed = now - self.interval_started
         if elapsed >= 1.0:
             logging.info(
                 "Stream %.1f FPS | inference %.1f ms | cloud %.1f ms | "
-                "%d points | segmentation=%s",
+                "points %d -> bbox %d -> table %d -> output %d | segmentation=%s",
                 self.interval_frames / elapsed,
                 inference_ms,
                 pointcloud_ms,
+                generated_points,
+                after_bbox_points,
+                after_table_points,
                 points,
                 SEGMENTATION_ENABLED,
             )
@@ -571,6 +697,7 @@ class StreamRateLogger:
         max_points: int,
         voxel_size: float,
         bbox_filter: bool,
+        table_filter: bool,
         flip_x: bool,
         xyz_scale: float,
     ) -> dict[str, int | float | str | bool]:
@@ -581,7 +708,21 @@ class StreamRateLogger:
         inference = np.asarray(self.inference_times_ms, dtype=np.float64)
         pointcloud = np.asarray(self.pointcloud_times_ms, dtype=np.float64)
         points = np.asarray(self.point_counts, dtype=np.float64)
+        generated = np.asarray(self.generated_point_counts, dtype=np.float64)
+        after_bbox = np.asarray(self.after_bbox_point_counts, dtype=np.float64)
+        after_table = np.asarray(self.after_table_point_counts, dtype=np.float64)
+
+        def retained_percent(after: np.ndarray, before: np.ndarray) -> float:
+            before_mean = float(before.mean())
+            return 0.0 if before_mean == 0.0 else float(after.mean()) / before_mean * 100.0
+
         return {
+            "after_bbox_retained_percent": round(
+                retained_percent(after_bbox, generated), 2
+            ),
+            "after_table_retained_percent": round(
+                retained_percent(after_table, after_bbox), 2
+            ),
             "bbox_filter": bbox_filter,
             "camera_count": camera_count,
             "elapsed_s": round(elapsed, 4),
@@ -592,11 +733,18 @@ class StreamRateLogger:
             "max_points": max_points,
             "pointcloud_mean_ms": round(float(pointcloud.mean()), 4),
             "pointcloud_p95_ms": round(float(np.percentile(pointcloud, 95)), 4),
+            "points_after_bbox_mean": round(float(after_bbox.mean()), 1),
+            "points_after_table_mean": round(float(after_table.mean()), 1),
+            "points_generated_mean": round(float(generated.mean()), 1),
             "points_mean": round(float(points.mean()), 1),
+            "points_output_retained_percent": round(
+                retained_percent(points, after_table), 2
+            ),
             "requested_camera_fps": requested_camera_fps,
             "resolution": resolution,
             "segmentation": SEGMENTATION_ENABLED,
             "stream_fps": round(self.total_frames / elapsed, 4),
+            "table_filter": table_filter,
             "voxel_size_m": voxel_size,
             "xyz_scale": xyz_scale,
         }
@@ -775,6 +923,32 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
         metavar=("X", "Y", "Z"),
         help="Bounding-box maximum XYZ in the output frame, in metres",
     )
+    parser.add_argument(
+        "--table-filter",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Remove the calibrated table plane and everything below it before "
+            "downsampling (default: disabled)"
+        ),
+    )
+    parser.add_argument(
+        "--table-plane",
+        nargs=4,
+        type=float,
+        default=DEFAULT_TABLE_PLANE,
+        metavar=("A", "B", "C", "D"),
+        help=(
+            "Output-frame plane a*x+b*y+c*z+d=0; its positive side is kept "
+            "(default: calibrated rig at xyz-scale=1.5 with flip-x)"
+        ),
+    )
+    parser.add_argument(
+        "--table-clearance",
+        type=float,
+        default=0.01,
+        help="Keep points this far above --table-plane, in output metres (default: 0.01)",
+    )
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--discovery-port", type=int, default=5556)
     parser.add_argument("--random-seed", type=int, default=0)
@@ -835,6 +1009,11 @@ def _validate_args(
         parser.error("depth range must satisfy 0 < --z-min < --z-max")
     if args.voxel_size < 0.0 or args.max_points < 0:
         parser.error("--voxel-size and --max-points cannot be negative")
+    table_plane = np.asarray(args.table_plane, dtype=np.float64)
+    if not np.isfinite(table_plane).all() or np.linalg.norm(table_plane[:3]) <= 0.0:
+        parser.error("--table-plane requires finite coefficients and a nonzero normal")
+    if not np.isfinite(args.table_clearance) or args.table_clearance < 0.0:
+        parser.error("--table-clearance must be a non-negative finite number")
     bbox_values_supplied = args.bbox_min is not None or args.bbox_max is not None
     if args.bbox_filter and (args.bbox_min is None or args.bbox_max is None):
         parser.error("--bbox-filter requires both --bbox-min and --bbox-max")
@@ -855,7 +1034,10 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
     output_adjustment[0, 0] = -args.xyz_scale if args.flip_x else args.xyz_scale
     output_adjustment[1, 1] = args.xyz_scale
     output_adjustment[2, 2] = args.xyz_scale
-    transforms = [output_adjustment @ transform for transform in transforms]
+    transforms = [
+        np.ascontiguousarray(output_adjustment @ transform, dtype=np.float32)
+        for transform in transforms
+    ]
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     logging.info("Segmentation enabled: %s", SEGMENTATION_ENABLED)
@@ -865,6 +1047,14 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
         logging.info("Bounding-box filter: min=%s max=%s", args.bbox_min, args.bbox_max)
     else:
         logging.info("Bounding-box filter: disabled")
+    if args.table_filter:
+        logging.info(
+            "Table filter: plane=%s clearance=%.6g (positive side kept)",
+            args.table_plane,
+            args.table_clearance,
+        )
+    else:
+        logging.info("Table filter: disabled")
     if camera_count == 2 and not args.transform:
         logging.warning(
             "Using identity transforms for both cameras; clouds are unregistered (FPS test)"
@@ -897,6 +1087,12 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                 if not args.bbox_filter
                 else np.asarray(args.bbox_max, dtype=np.float32)
             ),
+            table_plane=(
+                None
+                if not args.table_filter
+                else np.asarray(args.table_plane, dtype=np.float32)
+            ),
+            table_clearance=args.table_clearance,
             random_seed=args.random_seed,
         )
         rate = StreamRateLogger()
@@ -905,7 +1101,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
         pending_rgb_path = args.save_first_rgb
         early_sample_limit = (
             args.max_points
-            if args.voxel_size == 0.0 and not args.bbox_filter
+            if args.voxel_size == 0.0
             else 0
         )
 
@@ -921,8 +1117,13 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
             pointcloud_start = time.perf_counter()
-            clouds = [
-                disparity_to_point_cloud(
+            clouds: list[tuple[np.ndarray, np.ndarray]] = []
+            camera_stage_counts: list[dict[str, int]] = []
+            for disparity, frame, transform in zip(
+                disparities, prepared_frames, transforms, strict=True
+            ):
+                stage_counts: dict[str, int] = {}
+                cloud = disparity_to_point_cloud(
                     disparity=disparity,
                     left_rgb=frame.left_rgb,
                     calibration=frame.calibration,
@@ -932,13 +1133,26 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     camera_to_output=transform,
                     sample_limit=early_sample_limit,
                     rng=projection_rng,
+                    bbox_min=processor.bbox_min,
+                    bbox_max=processor.bbox_max,
+                    table_normal=processor.table_normal,
+                    table_offset=processor.table_offset,
+                    table_clearance=processor.table_clearance,
+                    stage_counts=stage_counts,
                 )
-                for disparity, frame, transform in zip(
-                    disparities, prepared_frames, transforms, strict=True
-                )
-            ]
-            points, colors = processor.process(clouds)
+                clouds.append(cloud)
+                camera_stage_counts.append(stage_counts)
+            points, colors = processor.process(clouds, spatial_filter_applied=True)
             pointcloud_ms = (time.perf_counter() - pointcloud_start) * 1000.0
+            generated_points = sum(
+                counts["generated"] for counts in camera_stage_counts
+            )
+            after_bbox_points = sum(
+                counts["after_bbox"] for counts in camera_stage_counts
+            )
+            after_table_points = sum(
+                counts["after_table"] for counts in camera_stage_counts
+            )
             if pending_cloud_path is not None:
                 save_point_cloud_ply(pending_cloud_path, points, colors)
                 logging.info(
@@ -955,7 +1169,14 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                 )
                 pending_rgb_path = None
             publisher.publish(points, colors)
-            rate.update(len(points), inference_ms, pointcloud_ms)
+            rate.update(
+                len(points),
+                inference_ms,
+                pointcloud_ms,
+                generated_points,
+                after_bbox_points,
+                after_table_points,
+            )
             if args.benchmark_frames and rate.total_frames >= args.benchmark_frames:
                 result = rate.benchmark_result(
                     camera_count=camera_count,
@@ -964,6 +1185,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     max_points=args.max_points,
                     voxel_size=args.voxel_size,
                     bbox_filter=args.bbox_filter,
+                    table_filter=args.table_filter,
                     flip_x=args.flip_x,
                     xyz_scale=args.xyz_scale,
                 )
