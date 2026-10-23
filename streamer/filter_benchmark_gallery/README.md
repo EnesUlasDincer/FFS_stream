@@ -2,10 +2,14 @@
 
 [Open the interactive 3D gallery](https://raw.githack.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/filter_benchmark_gallery/index.html)
 
+For current one- and two-camera commands with fast median noise reduction, see
+the [Fast noise reduction section](../README_zed_foundation_streaming.md#fast-noise-reduction).
+
 This dataset uses two calibrated ZED cameras, Fast-FoundationStereo TensorRT
 inference, XYZ scale 1.5, reflected X, no voxel filter, and segmentation off.
-Each benchmark runs for 120 streamed frames. The matrix covers VGA, HD720,
-HD1080, and HD2K; 30K, 50K, and 80K point caps; and four spatial-filter modes.
+The fast disparity noise filter is also off in this dataset. Each benchmark
+runs for 120 streamed frames. The matrix covers VGA, HD720, HD1080, and HD2K;
+30K, 50K, and 80K point caps; and four spatial-filter modes.
 
 ![FPS benchmark matrix](fps_matrix.png)
 

@@ -304,6 +304,42 @@ def resize_stereo_frame(
     return StereoFrame(left_rgb=left, right_rgb=right, calibration=calibration)
 
 
+def fast_disparity_noise_filter(
+    disparity: np.ndarray,
+    valid: np.ndarray,
+    kernel_size: int,
+    relative_threshold: float,
+    absolute_threshold: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Median-smooth disparity and return its locally consistent samples.
+
+    OpenCV evaluates the median in optimized native code. Invalid pixels are
+    represented by zero, so isolated valid speckles and unsupported depth
+    boundaries are rejected rather than being extended into empty regions.
+    """
+
+    if disparity.shape != valid.shape:
+        raise ValueError("disparity and valid mask must have the same shape")
+    if kernel_size not in (3, 5):
+        raise ValueError("noise-filter kernel size must be 3 or 5")
+    if relative_threshold < 0.0 or absolute_threshold < 0.0:
+        raise ValueError("noise-filter thresholds cannot be negative")
+
+    source = np.zeros(disparity.shape, dtype=np.float32)
+    source[valid] = disparity[valid]
+    local_median = cv2.medianBlur(source, kernel_size)
+    tolerance = np.maximum(
+        absolute_threshold,
+        np.abs(local_median) * relative_threshold,
+    )
+    keep = (
+        valid
+        & (local_median > 1e-6)
+        & (np.abs(source - local_median) <= tolerance)
+    )
+    return local_median, keep
+
+
 def disparity_to_point_cloud(
     disparity: np.ndarray,
     left_rgb: np.ndarray,
@@ -319,13 +355,17 @@ def disparity_to_point_cloud(
     table_normal: np.ndarray | None = None,
     table_offset: float = 0.0,
     table_clearance: float = 0.0,
+    noise_filter: bool = False,
+    noise_kernel_size: int = 3,
+    noise_relative_threshold: float = 0.03,
+    noise_absolute_threshold: float = 1.0,
     stage_counts: dict[str, int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Back-project, transform, spatially filter, and sample one disparity map."""
 
     if stage_counts is not None:
         stage_counts.clear()
-        stage_counts.update(generated=0, after_bbox=0, after_table=0)
+        stage_counts.update(generated=0, after_noise=0, after_bbox=0, after_table=0)
 
     fx = float(calibration.matrix[0, 0])
     fy = float(calibration.matrix[1, 1])
@@ -337,28 +377,48 @@ def disparity_to_point_cloud(
         u_coordinates = np.arange(disparity.shape[1], dtype=np.float32)[None, :]
         valid &= (u_coordinates - disparity) >= 0.0
 
-    rows, columns = np.nonzero(valid)
-    if rows.size == 0:
-        empty = np.empty((0, 3), dtype=np.float32)
-        return empty, empty.copy()
-
-    z = (fx * calibration.baseline_m / disparity[rows, columns]).astype(
-        np.float32, copy=False
-    )
-    valid_depth = np.isfinite(z) & (z >= z_min) & (z <= z_max)
-    rows = rows[valid_depth]
-    columns = columns[valid_depth]
-    z = z[valid_depth]
-    generated_count = int(rows.size)
+    depth_scale = fx * calibration.baseline_m
+    valid &= disparity >= depth_scale / z_max
+    valid &= disparity <= depth_scale / z_min
+    generated_count = int(np.count_nonzero(valid))
     if stage_counts is not None:
         stage_counts.update(
             generated=generated_count,
+            after_noise=generated_count,
             after_bbox=generated_count,
             after_table=generated_count,
         )
-    if rows.size == 0:
+    if generated_count == 0:
         empty = np.empty((0, 3), dtype=np.float32)
         return empty, empty.copy()
+
+    depth_disparity = disparity
+    if noise_filter:
+        filtered_disparity, noise_valid = fast_disparity_noise_filter(
+            disparity=disparity,
+            valid=valid,
+            kernel_size=noise_kernel_size,
+            relative_threshold=noise_relative_threshold,
+            absolute_threshold=noise_absolute_threshold,
+        )
+        valid = noise_valid
+        depth_disparity = filtered_disparity
+
+    after_noise_count = int(np.count_nonzero(valid))
+    if stage_counts is not None:
+        stage_counts.update(
+            after_noise=after_noise_count,
+            after_bbox=after_noise_count,
+            after_table=after_noise_count,
+        )
+    if after_noise_count == 0:
+        empty = np.empty((0, 3), dtype=np.float32)
+        return empty, empty.copy()
+
+    rows, columns = np.nonzero(valid)
+    z = (depth_scale / depth_disparity[rows, columns]).astype(
+        np.float32, copy=False
+    )
 
     spatial_filter_enabled = bbox_min is not None or table_normal is not None
     if not spatial_filter_enabled and sample_limit > 0 and rows.size > sample_limit:
@@ -651,6 +711,7 @@ class StreamRateLogger:
         self.pointcloud_times_ms: list[float] = []
         self.point_counts: list[int] = []
         self.generated_point_counts: list[int] = []
+        self.after_noise_point_counts: list[int] = []
         self.after_bbox_point_counts: list[int] = []
         self.after_table_point_counts: list[int] = []
 
@@ -660,6 +721,7 @@ class StreamRateLogger:
         inference_ms: float,
         pointcloud_ms: float,
         generated_points: int,
+        after_noise_points: int,
         after_bbox_points: int,
         after_table_points: int,
     ) -> None:
@@ -669,6 +731,7 @@ class StreamRateLogger:
         self.pointcloud_times_ms.append(pointcloud_ms)
         self.point_counts.append(points)
         self.generated_point_counts.append(generated_points)
+        self.after_noise_point_counts.append(after_noise_points)
         self.after_bbox_point_counts.append(after_bbox_points)
         self.after_table_point_counts.append(after_table_points)
         now = time.perf_counter()
@@ -676,11 +739,13 @@ class StreamRateLogger:
         if elapsed >= 1.0:
             logging.info(
                 "Stream %.1f FPS | inference %.1f ms | cloud %.1f ms | "
-                "points %d -> bbox %d -> table %d -> output %d | segmentation=%s",
+                "points %d -> noise %d -> bbox %d -> table %d -> output %d | "
+                "segmentation=%s",
                 self.interval_frames / elapsed,
                 inference_ms,
                 pointcloud_ms,
                 generated_points,
+                after_noise_points,
                 after_bbox_points,
                 after_table_points,
                 points,
@@ -696,6 +761,7 @@ class StreamRateLogger:
         requested_camera_fps: int,
         max_points: int,
         voxel_size: float,
+        noise_filter: bool,
         bbox_filter: bool,
         table_filter: bool,
         flip_x: bool,
@@ -709,6 +775,7 @@ class StreamRateLogger:
         pointcloud = np.asarray(self.pointcloud_times_ms, dtype=np.float64)
         points = np.asarray(self.point_counts, dtype=np.float64)
         generated = np.asarray(self.generated_point_counts, dtype=np.float64)
+        after_noise = np.asarray(self.after_noise_point_counts, dtype=np.float64)
         after_bbox = np.asarray(self.after_bbox_point_counts, dtype=np.float64)
         after_table = np.asarray(self.after_table_point_counts, dtype=np.float64)
 
@@ -717,8 +784,11 @@ class StreamRateLogger:
             return 0.0 if before_mean == 0.0 else float(after.mean()) / before_mean * 100.0
 
         return {
+            "after_noise_retained_percent": round(
+                retained_percent(after_noise, generated), 2
+            ),
             "after_bbox_retained_percent": round(
-                retained_percent(after_bbox, generated), 2
+                retained_percent(after_bbox, after_noise), 2
             ),
             "after_table_retained_percent": round(
                 retained_percent(after_table, after_bbox), 2
@@ -731,9 +801,11 @@ class StreamRateLogger:
             "inference_mean_ms": round(float(inference.mean()), 4),
             "inference_p95_ms": round(float(np.percentile(inference, 95)), 4),
             "max_points": max_points,
+            "noise_filter": noise_filter,
             "pointcloud_mean_ms": round(float(pointcloud.mean()), 4),
             "pointcloud_p95_ms": round(float(np.percentile(pointcloud, 95)), 4),
             "points_after_bbox_mean": round(float(after_bbox.mean()), 1),
+            "points_after_noise_mean": round(float(after_noise.mean()), 1),
             "points_after_table_mean": round(float(after_table.mean()), 1),
             "points_generated_mean": round(float(generated.mean()), 1),
             "points_mean": round(float(points.mean()), 1),
@@ -900,6 +972,34 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
         help="Maximum points per message; 0 disables",
     )
     parser.add_argument(
+        "--noise-filter",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Reject isolated disparity outliers with a fast local median "
+            "consistency check (default: disabled)"
+        ),
+    )
+    parser.add_argument(
+        "--noise-kernel-size",
+        type=int,
+        choices=(3, 5),
+        default=3,
+        help="Median neighborhood for --noise-filter: 3 is fastest (default: 3)",
+    )
+    parser.add_argument(
+        "--noise-relative-threshold",
+        type=float,
+        default=0.03,
+        help="Allowed local disparity deviation as a fraction (default: 0.03)",
+    )
+    parser.add_argument(
+        "--noise-absolute-threshold",
+        type=float,
+        default=1.0,
+        help="Minimum allowed local disparity deviation in pixels (default: 1.0)",
+    )
+    parser.add_argument(
         "--bbox-filter",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -1009,6 +1109,14 @@ def _validate_args(
         parser.error("depth range must satisfy 0 < --z-min < --z-max")
     if args.voxel_size < 0.0 or args.max_points < 0:
         parser.error("--voxel-size and --max-points cannot be negative")
+    noise_thresholds = (
+        args.noise_relative_threshold,
+        args.noise_absolute_threshold,
+    )
+    if not np.isfinite(noise_thresholds).all() or any(
+        value < 0.0 for value in noise_thresholds
+    ):
+        parser.error("noise-filter thresholds must be non-negative finite numbers")
     table_plane = np.asarray(args.table_plane, dtype=np.float64)
     if not np.isfinite(table_plane).all() or np.linalg.norm(table_plane[:3]) <= 0.0:
         parser.error("--table-plane requires finite coefficients and a nonzero normal")
@@ -1043,6 +1151,15 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
     logging.info("Segmentation enabled: %s", SEGMENTATION_ENABLED)
     logging.info("Legacy VR X reflection: %s", args.flip_x)
     logging.info("XYZ output scale: %.6g", args.xyz_scale)
+    if args.noise_filter:
+        logging.info(
+            "Fast noise filter: kernel=%d relative=%.6g absolute=%.6g px",
+            args.noise_kernel_size,
+            args.noise_relative_threshold,
+            args.noise_absolute_threshold,
+        )
+    else:
+        logging.info("Fast noise filter: disabled")
     if args.bbox_filter:
         logging.info("Bounding-box filter: min=%s max=%s", args.bbox_min, args.bbox_max)
     else:
@@ -1138,6 +1255,10 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     table_normal=processor.table_normal,
                     table_offset=processor.table_offset,
                     table_clearance=processor.table_clearance,
+                    noise_filter=args.noise_filter,
+                    noise_kernel_size=args.noise_kernel_size,
+                    noise_relative_threshold=args.noise_relative_threshold,
+                    noise_absolute_threshold=args.noise_absolute_threshold,
                     stage_counts=stage_counts,
                 )
                 clouds.append(cloud)
@@ -1146,6 +1267,9 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
             pointcloud_ms = (time.perf_counter() - pointcloud_start) * 1000.0
             generated_points = sum(
                 counts["generated"] for counts in camera_stage_counts
+            )
+            after_noise_points = sum(
+                counts["after_noise"] for counts in camera_stage_counts
             )
             after_bbox_points = sum(
                 counts["after_bbox"] for counts in camera_stage_counts
@@ -1174,6 +1298,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                 inference_ms,
                 pointcloud_ms,
                 generated_points,
+                after_noise_points,
                 after_bbox_points,
                 after_table_points,
             )
@@ -1184,6 +1309,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     requested_camera_fps=args.camera_fps,
                     max_points=args.max_points,
                     voxel_size=args.voxel_size,
+                    noise_filter=args.noise_filter,
                     bbox_filter=args.bbox_filter,
                     table_filter=args.table_filter,
                     flip_x=args.flip_x,
@@ -1211,6 +1337,7 @@ __all__ = [
     "StereoFrame",
     "ZedStereoCamera",
     "disparity_to_point_cloud",
+    "fast_disparity_noise_filter",
     "load_transform",
     "run_stream",
     "save_point_cloud_ply",

@@ -91,6 +91,7 @@ conda activate ffs
 | `--max-points` | Output density versus speed | `15000` balanced, `5000` fastest |
 | `--xyz-scale` | Uniform output geometry scale | `1.5` (current calibrated VR default) |
 | `--voxel-size` | CPU voxel filter | `0` for real time |
+| `--noise-filter` | Fast isolated-point rejection | Enable for a cleaner VR cloud |
 | `--transform` | Camera 2 to camera 1 extrinsic matrix | Required for real merging |
 | `--port` | ZMQ publisher port | `5555` |
 
@@ -327,6 +328,113 @@ multiple matrices, append a dotted key to the filename:
 ```bash
 --transform /path/to/extrinsics.yml:T_follower_to_main
 ```
+
+## Fast noise reduction
+
+Add `--noise-filter` to remove isolated stereo speckles and unsupported edge
+points before XYZ projection, RGB conversion, bounding-box filtering, and the
+final point cap. It replaces retained disparity values with their local median
+using OpenCV's optimized native implementation, reducing XYZ surface jitter,
+and rejects samples that disagree too strongly with their neighborhood.
+
+Recommended real-time settings:
+
+```bash
+--noise-filter \
+--noise-kernel-size 3 \
+--noise-relative-threshold 0.03 \
+--noise-absolute-threshold 1.0
+```
+
+### Run one camera with noise reduction
+
+```bash
+CALIB=/home/enes/Documents/fast_mail_fork/configs/cameras/calibration/2026-10-24.yaml
+
+python streamer/Streamer_real_one_cam.py \
+  --serial 17008863 \
+  --engine-dir output \
+  --resolution HD1080 \
+  --camera-fps 30 \
+  --transform "${CALIB}:left_cam.extrinsics" \
+  --xyz-scale 1.5 \
+  --flip-x \
+  --noise-filter \
+  --bbox-filter \
+  --bbox-min -1.35 -0.70 -0.10 \
+  --bbox-max -0.20 0.60 0.50 \
+  --table-filter \
+  --max-points 30000
+```
+
+### Run two cameras with noise reduction
+
+```bash
+CALIB=/home/enes/Documents/fast_mail_fork/configs/cameras/calibration/2026-10-24.yaml
+
+python streamer/Streamer_real_two_cam.py \
+  --serial 17008863 --serial 16055244 \
+  --engine-dir output \
+  --resolution HD1080 \
+  --camera-fps 30 \
+  --transform "${CALIB}:left_cam.extrinsics" \
+  --transform "${CALIB}:right_cam.extrinsics" \
+  --xyz-scale 1.5 \
+  --flip-x \
+  --noise-filter \
+  --bbox-filter \
+  --bbox-min -1.35 -0.70 -0.10 \
+  --bbox-max -0.20 0.60 0.50 \
+  --table-filter \
+  --max-points 30000
+```
+
+### View the live cloud locally
+
+Start this in a second terminal after starting either streamer:
+
+```bash
+conda activate ffs
+cd /home/enes/Documents/Fast-FoundationStereo
+
+python streamer/view_point_cloud.py live \
+  --endpoint tcp://127.0.0.1:5555 \
+  --axis-size 0.5 \
+  --point-size 2.0
+```
+
+### Save one filtered cloud and matching RGB image
+
+Add these arguments to either streaming command:
+
+```bash
+--save-first-cloud output_clouds/noise_hd1080_30k.ply \
+--save-first-rgb output_clouds/noise_hd1080_rgb.png
+```
+
+Add `--benchmark-frames 120` to stop automatically after 120 frames and print
+the measured FPS plus every filter-stage point count.
+
+The default 3x3 kernel is the fastest and best starting point. A 5x5 kernel is
+stronger but slower and can remove narrow structures. Increase either
+threshold to retain more points; decrease them for stronger rejection. Disable
+the filter by omitting `--noise-filter` or passing `--no-noise-filter`.
+
+The periodic log and benchmark JSON report the complete order and reduction:
+`generated -> noise -> bbox -> table -> output`.
+
+Live HD1080 measurements (120 frames, TensorRT, calibrated box and table
+filters, 30K output cap) show that the optimized filter preserves throughput:
+
+| Cameras | Noise filter | Stream FPS | Mean cloud processing |
+|---:|---|---:|---:|
+| 1 | Off | 29.83 | 3.02 ms |
+| 1 | On | 29.56 | 3.53 ms |
+| 2 | Off | 28.93 | 6.77 ms |
+| 2 | On | 28.62 | 7.56 ms |
+
+Point counts report rejected outliers; they do not show the median smoothing
+applied to every retained disparity.
 
 ## Bounding-box filter
 
@@ -828,6 +936,10 @@ python streamer/Streamer_real_one_cam.py \
 | `--z-max` | 5.0 m | Maximum retained depth |
 | `--max-points` | 15000 | Random output cap; `0` keeps all points |
 | `--voxel-size` | 0 | Voxel size in metres; `0` disables filtering |
+| `--noise-filter` | disabled | Fast local disparity-consistency outlier rejection |
+| `--noise-kernel-size` | 3 | Median neighborhood; `5` is stronger and slower |
+| `--noise-relative-threshold` | 0.03 | Allowed local disparity deviation as a fraction |
+| `--noise-absolute-threshold` | 1.0 px | Minimum allowed local disparity deviation |
 | `--bbox-filter` | disabled | Enable the axis-aligned 3D box |
 | `--bbox-min X Y Z` | required when enabled | Minimum output-frame corner |
 | `--bbox-max X Y Z` | required when enabled | Maximum output-frame corner |
@@ -841,12 +953,12 @@ python streamer/Streamer_real_one_cam.py \
 | `--remove-invisible` | enabled | Reject correspondences outside the right image |
 | `--random-seed` | 0 | Reproducible point sampling |
 
-When voxel filtering is disabled, the implementation applies the bounding box
-and table plane inside each camera's projection and then samples immediately.
-Only the retained samples receive RGB conversion and enter the merged cloud.
-Without spatial filters, sampling happens even earlier, before XYZ projection.
-Voxel filtering still needs all spatially valid points so it can identify the
-occupied voxels correctly.
+The fast noise check runs first in disparity/image space. When voxel filtering
+is disabled, the implementation then applies the bounding box and table plane
+inside each camera's projection and samples immediately. Only retained samples
+receive RGB conversion and enter the merged cloud. Without spatial filters,
+sampling happens before XYZ projection. Voxel filtering still needs all
+spatially valid points so it can identify occupied voxels correctly.
 
 On a repeatable synthetic 448x640 test using the current calibrated transform,
 bounding box, table plane, and a 30K cap, this reduced median CPU point-cloud
@@ -873,7 +985,8 @@ rate.
 The repository also includes a 48-case two-camera matrix covering all four
 capture resolutions, 30K/50K/80K point caps, and filters off/box/table/both.
 Every case has its own downloadable PLY, measured FPS, and matching
-resolution-level RGB reference:
+resolution-level RGB reference. This existing matrix was captured before the
+noise filter and therefore has noise filtering disabled:
 
 [Open the interactive filter benchmark gallery](https://raw.githack.com/EnesUlasDincer/FFS_stream/zed-trt-pointcloud-streaming/streamer/filter_benchmark_gallery/index.html).
 
@@ -903,6 +1016,10 @@ Regenerate all GitHub-visible PNG comparisons with:
 ```bash
 python streamer/render_filter_benchmark_previews.py
 ```
+
+To capture a separate matrix with median noise reduction enabled, add
+`--noise-filter --output-dir streamer/noise_filter_benchmark` to the benchmark
+command. Keep it separate from the existing no-noise gallery when resuming.
 
 ## ZMQ wire format
 

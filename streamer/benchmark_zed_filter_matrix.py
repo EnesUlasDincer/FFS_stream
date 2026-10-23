@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import math
 import shlex
 import subprocess
 import sys
@@ -60,6 +61,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--bbox-max", nargs=3, type=float, default=(-0.20, 0.60, 0.50)
     )
     parser.add_argument("--table-clearance", type=float, default=0.01)
+    parser.add_argument(
+        "--noise-filter",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable the fast disparity-consistency noise filter for every case",
+    )
+    parser.add_argument("--noise-kernel-size", type=int, choices=(3, 5), default=3)
+    parser.add_argument("--noise-relative-threshold", type=float, default=0.03)
+    parser.add_argument("--noise-absolute-threshold", type=float, default=1.0)
     parser.add_argument("--base-port", type=int, default=18000)
     parser.add_argument("--timeout", type=float, default=240.0)
     parser.add_argument("--case-retries", type=int, default=3)
@@ -158,6 +168,20 @@ def build_command(
         )
     else:
         command.append("--no-table-filter")
+    if args.noise_filter:
+        command.extend(
+            (
+                "--noise-filter",
+                "--noise-kernel-size",
+                str(args.noise_kernel_size),
+                "--noise-relative-threshold",
+                str(args.noise_relative_threshold),
+                "--noise-absolute-threshold",
+                str(args.noise_absolute_threshold),
+            )
+        )
+    else:
+        command.append("--no-noise-filter")
     return command
 
 
@@ -175,6 +199,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--case-delay cannot be negative")
     if args.xyz_scale <= 0.0 or args.table_clearance < 0.0:
         raise ValueError("Scale must be positive and table clearance cannot be negative")
+    noise_thresholds = (
+        args.noise_relative_threshold,
+        args.noise_absolute_threshold,
+    )
+    if any(not math.isfinite(value) or value < 0.0 for value in noise_thresholds):
+        raise ValueError("Noise thresholds must be non-negative finite numbers")
     if any(a >= b for a, b in zip(args.bbox_min, args.bbox_max, strict=True)):
         raise ValueError("Every bbox-min coordinate must be below bbox-max")
 
@@ -197,6 +227,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "filter_modes": filter_modes,
         "frames_per_case": args.frames,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "noise_absolute_threshold": args.noise_absolute_threshold,
+        "noise_filter": args.noise_filter,
+        "noise_kernel_size": args.noise_kernel_size,
+        "noise_relative_threshold": args.noise_relative_threshold,
         "point_limits": point_limits,
         "resolutions": resolutions,
         "segmentation": False,
@@ -206,9 +240,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     results: list[dict[str, Any]] = []
     if args.resume and result_path.exists() and not args.dry_run:
         existing = json.loads(result_path.read_text(encoding="utf-8"))
+        existing_noise_filter = bool(existing.get("noise_filter", False))
+        if existing_noise_filter != args.noise_filter:
+            raise ValueError(
+                "Cannot resume results captured with a different noise-filter "
+                "setting; choose another --output-dir or use --overwrite"
+            )
         results = existing.get("results", [])
         if not isinstance(results, list):
             raise ValueError(f"Invalid results list in {result_path}")
+        for result in results:
+            result.setdefault("noise_filter", False)
+            result.setdefault(
+                "points_after_noise_mean",
+                result.get("points_generated_mean", 0.0),
+            )
+            result.setdefault("after_noise_retained_percent", 100.0)
     completed_names = {result["name"] for result in results}
     result_indices = {result["name"]: index for index, result in enumerate(results)}
     saved_rgb: set[str] = set()
@@ -241,10 +288,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         command = build_command(
             args, resolution, points, filter_mode, ply_path, capture_rgb, index
         )
-        printable = [
-            "<SERIAL>" if token in {str(value) for value in args.serial} else token
-            for token in command
-        ]
+        printable = command.copy()
+        for token_index, token in enumerate(printable[:-1]):
+            if token == "--serial":
+                printable[token_index + 1] = "<SERIAL>"
         print(
             f"[{index + 1}/{len(cases)}] {resolution} {points // 1000}K {filter_mode}",
             flush=True,
@@ -296,6 +343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"inference {result['inference_mean_ms']:.2f} ms | "
             f"cloud {result['pointcloud_mean_ms']:.2f} ms | "
             f"points {int(result['points_generated_mean'])} -> "
+            f"noise {int(result['points_after_noise_mean'])} -> "
             f"bbox {int(result['points_after_bbox_mean'])} -> "
             f"table {int(result['points_after_table_mean'])} -> "
             f"output {int(result['points_mean'])}",
@@ -308,8 +356,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     stage_keys = (
         "points_generated_mean",
+        "points_after_noise_mean",
         "points_after_bbox_mean",
         "points_after_table_mean",
+        "after_noise_retained_percent",
         "after_bbox_retained_percent",
         "after_table_retained_percent",
     )
