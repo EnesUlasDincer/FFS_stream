@@ -489,6 +489,58 @@ def disparity_to_point_cloud(
     return np.ascontiguousarray(points), np.ascontiguousarray(colors)
 
 
+class CudaRadiusOutlierFilter:
+    """Exact 3D radius outlier removal using Open3D's CUDA backend."""
+
+    def __init__(self, radius: float, min_neighbors: int) -> None:
+        if not np.isfinite(radius) or radius <= 0.0:
+            raise ValueError("radius must be a positive finite number")
+        if min_neighbors < 1:
+            raise ValueError("min_neighbors must be at least 1")
+        try:
+            import open3d as o3d
+        except ImportError as exc:
+            raise RuntimeError(
+                "--radius-outlier-filter requires Open3D with CUDA support"
+            ) from exc
+        if not o3d.core.cuda.is_available():
+            raise RuntimeError(
+                "--radius-outlier-filter requires an Open3D CUDA device"
+            )
+        self.o3d = o3d
+        self.device = o3d.core.Device("CUDA:0")
+        self.radius = radius
+        self.min_neighbors = min_neighbors
+        logging.info("Warming up Open3D CUDA radius outlier removal")
+        grid = np.indices((4, 4, 4), dtype=np.float32).reshape(3, -1).T
+        warmup_points = np.ascontiguousarray(grid * (radius * 0.25))
+        warmup_colors = np.zeros_like(warmup_points)
+        self.apply(warmup_points, warmup_colors)
+
+    def apply(
+        self,
+        points: np.ndarray,
+        colors: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if len(points) == 0:
+            return points, colors
+        if len(points) <= self.min_neighbors:
+            return points[:0], colors[:0]
+
+        cloud = self.o3d.t.geometry.PointCloud(self.device)
+        cloud.point.positions = self.o3d.core.Tensor(
+            points,
+            dtype=self.o3d.core.Dtype.Float32,
+            device=self.device,
+        )
+        _, mask = cloud.remove_radius_outliers(
+            nb_points=self.min_neighbors + 1,
+            search_radius=self.radius,
+        )
+        keep = np.asarray(mask.cpu().numpy(), dtype=bool).reshape(-1)
+        return points[keep], colors[keep]
+
+
 class PointCloudProcessor:
     """Merges, spatially filters, downsamples, and caps the streamed cloud."""
 
@@ -501,6 +553,8 @@ class PointCloudProcessor:
         table_plane: np.ndarray | None,
         table_clearance: float,
         random_seed: int,
+        radius_outlier_radius: float | None = None,
+        radius_outlier_min_neighbors: int = 5,
     ) -> None:
         self.voxel_size = voxel_size
         self.max_points = max_points
@@ -522,6 +576,15 @@ class PointCloudProcessor:
             raise ValueError("table_clearance must be a non-negative finite number")
         self.table_clearance = table_clearance
         self.rng = np.random.default_rng(random_seed)
+        self.radius_outlier_filter = (
+            None
+            if radius_outlier_radius is None
+            else CudaRadiusOutlierFilter(
+                radius=radius_outlier_radius,
+                min_neighbors=radius_outlier_min_neighbors,
+            )
+        )
+        self.points_before_radius = 0
 
     def process(
         self,
@@ -555,6 +618,10 @@ class PointCloudProcessor:
             keep = self.rng.choice(len(points), self.max_points, replace=False)
             points = points[keep]
             colors = colors[keep]
+
+        self.points_before_radius = len(points)
+        if self.radius_outlier_filter is not None:
+            points, colors = self.radius_outlier_filter.apply(points, colors)
 
         return np.ascontiguousarray(points), np.ascontiguousarray(colors)
 
@@ -714,6 +781,7 @@ class StreamRateLogger:
         self.after_noise_point_counts: list[int] = []
         self.after_bbox_point_counts: list[int] = []
         self.after_table_point_counts: list[int] = []
+        self.before_radius_point_counts: list[int] = []
 
     def update(
         self,
@@ -724,6 +792,7 @@ class StreamRateLogger:
         after_noise_points: int,
         after_bbox_points: int,
         after_table_points: int,
+        before_radius_points: int,
     ) -> None:
         self.interval_frames += 1
         self.total_frames += 1
@@ -734,12 +803,14 @@ class StreamRateLogger:
         self.after_noise_point_counts.append(after_noise_points)
         self.after_bbox_point_counts.append(after_bbox_points)
         self.after_table_point_counts.append(after_table_points)
+        self.before_radius_point_counts.append(before_radius_points)
         now = time.perf_counter()
         elapsed = now - self.interval_started
         if elapsed >= 1.0:
             logging.info(
                 "Stream %.1f FPS | inference %.1f ms | cloud %.1f ms | "
-                "points %d -> noise %d -> bbox %d -> table %d -> output %d | "
+                "points %d -> median %d -> bbox %d -> table %d -> sample %d "
+                "-> radius %d | "
                 "segmentation=%s",
                 self.interval_frames / elapsed,
                 inference_ms,
@@ -748,6 +819,7 @@ class StreamRateLogger:
                 after_noise_points,
                 after_bbox_points,
                 after_table_points,
+                before_radius_points,
                 points,
                 SEGMENTATION_ENABLED,
             )
@@ -762,6 +834,9 @@ class StreamRateLogger:
         max_points: int,
         voxel_size: float,
         noise_filter: bool,
+        radius_outlier_filter: bool,
+        radius_outlier_radius: float,
+        radius_outlier_min_neighbors: int,
         bbox_filter: bool,
         table_filter: bool,
         flip_x: bool,
@@ -778,6 +853,7 @@ class StreamRateLogger:
         after_noise = np.asarray(self.after_noise_point_counts, dtype=np.float64)
         after_bbox = np.asarray(self.after_bbox_point_counts, dtype=np.float64)
         after_table = np.asarray(self.after_table_point_counts, dtype=np.float64)
+        before_radius = np.asarray(self.before_radius_point_counts, dtype=np.float64)
 
         def retained_percent(after: np.ndarray, before: np.ndarray) -> float:
             before_mean = float(before.mean())
@@ -807,12 +883,19 @@ class StreamRateLogger:
             "points_after_bbox_mean": round(float(after_bbox.mean()), 1),
             "points_after_noise_mean": round(float(after_noise.mean()), 1),
             "points_after_table_mean": round(float(after_table.mean()), 1),
+            "points_before_radius_mean": round(float(before_radius.mean()), 1),
             "points_generated_mean": round(float(generated.mean()), 1),
             "points_mean": round(float(points.mean()), 1),
             "points_output_retained_percent": round(
                 retained_percent(points, after_table), 2
             ),
             "requested_camera_fps": requested_camera_fps,
+            "radius_outlier_filter": radius_outlier_filter,
+            "radius_outlier_min_neighbors": radius_outlier_min_neighbors,
+            "radius_outlier_radius": radius_outlier_radius,
+            "radius_outlier_retained_percent": round(
+                retained_percent(points, before_radius), 2
+            ),
             "resolution": resolution,
             "segmentation": SEGMENTATION_ENABLED,
             "stream_fps": round(self.total_frames / elapsed, 4),
@@ -972,6 +1055,27 @@ def build_parser(camera_count: int) -> argparse.ArgumentParser:
         help="Maximum points per message; 0 disables",
     )
     parser.add_argument(
+        "--radius-outlier-filter",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use CUDA radius outlier removal after point sampling "
+            "(default: disabled)"
+        ),
+    )
+    parser.add_argument(
+        "--radius-outlier-radius",
+        type=float,
+        default=0.01,
+        help="3D neighbor-search radius in scaled output metres (default: 0.01)",
+    )
+    parser.add_argument(
+        "--radius-outlier-min-neighbors",
+        type=int,
+        default=5,
+        help="Required neighboring points inside the radius (default: 5)",
+    )
+    parser.add_argument(
         "--noise-filter",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -1109,6 +1213,13 @@ def _validate_args(
         parser.error("depth range must satisfy 0 < --z-min < --z-max")
     if args.voxel_size < 0.0 or args.max_points < 0:
         parser.error("--voxel-size and --max-points cannot be negative")
+    if (
+        not np.isfinite(args.radius_outlier_radius)
+        or args.radius_outlier_radius <= 0.0
+    ):
+        parser.error("--radius-outlier-radius must be a positive finite number")
+    if args.radius_outlier_min_neighbors < 1:
+        parser.error("--radius-outlier-min-neighbors must be at least 1")
     noise_thresholds = (
         args.noise_relative_threshold,
         args.noise_absolute_threshold,
@@ -1151,6 +1262,14 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
     logging.info("Segmentation enabled: %s", SEGMENTATION_ENABLED)
     logging.info("Legacy VR X reflection: %s", args.flip_x)
     logging.info("XYZ output scale: %.6g", args.xyz_scale)
+    if args.radius_outlier_filter:
+        logging.info(
+            "CUDA radius outlier filter: radius=%.6g min_neighbors=%d",
+            args.radius_outlier_radius,
+            args.radius_outlier_min_neighbors,
+        )
+    else:
+        logging.info("CUDA radius outlier filter: disabled")
     if args.noise_filter:
         logging.info(
             "Fast noise filter: kernel=%d relative=%.6g absolute=%.6g px",
@@ -1211,6 +1330,12 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
             ),
             table_clearance=args.table_clearance,
             random_seed=args.random_seed,
+            radius_outlier_radius=(
+                args.radius_outlier_radius
+                if args.radius_outlier_filter
+                else None
+            ),
+            radius_outlier_min_neighbors=args.radius_outlier_min_neighbors,
         )
         rate = StreamRateLogger()
         projection_rng = np.random.default_rng(args.random_seed)
@@ -1301,6 +1426,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                 after_noise_points,
                 after_bbox_points,
                 after_table_points,
+                processor.points_before_radius,
             )
             if args.benchmark_frames and rate.total_frames >= args.benchmark_frames:
                 result = rate.benchmark_result(
@@ -1310,6 +1436,9 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
                     max_points=args.max_points,
                     voxel_size=args.voxel_size,
                     noise_filter=args.noise_filter,
+                    radius_outlier_filter=args.radius_outlier_filter,
+                    radius_outlier_radius=args.radius_outlier_radius,
+                    radius_outlier_min_neighbors=args.radius_outlier_min_neighbors,
                     bbox_filter=args.bbox_filter,
                     table_filter=args.table_filter,
                     flip_x=args.flip_x,
@@ -1331,6 +1460,7 @@ def run_stream(camera_count: int, argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "SEGMENTATION_ENABLED",
     "CameraCalibration",
+    "CudaRadiusOutlierFilter",
     "FastFoundationStereoTensorRTRunner",
     "PointCloudProcessor",
     "PointCloudPublisher",

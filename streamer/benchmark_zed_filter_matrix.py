@@ -70,6 +70,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--noise-kernel-size", type=int, choices=(3, 5), default=3)
     parser.add_argument("--noise-relative-threshold", type=float, default=0.03)
     parser.add_argument("--noise-absolute-threshold", type=float, default=1.0)
+    parser.add_argument(
+        "--radius-outlier-filter",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable CUDA radius outlier removal after sampling for every case",
+    )
+    parser.add_argument("--radius-outlier-radius", type=float, default=0.01)
+    parser.add_argument("--radius-outlier-min-neighbors", type=int, default=5)
     parser.add_argument("--base-port", type=int, default=18000)
     parser.add_argument("--timeout", type=float, default=240.0)
     parser.add_argument("--case-retries", type=int, default=3)
@@ -182,6 +190,18 @@ def build_command(
         )
     else:
         command.append("--no-noise-filter")
+    if args.radius_outlier_filter:
+        command.extend(
+            (
+                "--radius-outlier-filter",
+                "--radius-outlier-radius",
+                str(args.radius_outlier_radius),
+                "--radius-outlier-min-neighbors",
+                str(args.radius_outlier_min_neighbors),
+            )
+        )
+    else:
+        command.append("--no-radius-outlier-filter")
     return command
 
 
@@ -205,6 +225,10 @@ def validate_args(args: argparse.Namespace) -> None:
     )
     if any(not math.isfinite(value) or value < 0.0 for value in noise_thresholds):
         raise ValueError("Noise thresholds must be non-negative finite numbers")
+    if not math.isfinite(args.radius_outlier_radius) or args.radius_outlier_radius <= 0:
+        raise ValueError("Radius-outlier radius must be a positive finite number")
+    if args.radius_outlier_min_neighbors < 1:
+        raise ValueError("Radius-outlier minimum neighbors must be at least 1")
     if any(a >= b for a, b in zip(args.bbox_min, args.bbox_max, strict=True)):
         raise ValueError("Every bbox-min coordinate must be below bbox-max")
 
@@ -232,6 +256,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "noise_kernel_size": args.noise_kernel_size,
         "noise_relative_threshold": args.noise_relative_threshold,
         "point_limits": point_limits,
+        "radius_outlier_filter": args.radius_outlier_filter,
+        "radius_outlier_min_neighbors": args.radius_outlier_min_neighbors,
+        "radius_outlier_radius": args.radius_outlier_radius,
         "resolutions": resolutions,
         "segmentation": False,
         "table_clearance": args.table_clearance,
@@ -246,6 +273,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Cannot resume results captured with a different noise-filter "
                 "setting; choose another --output-dir or use --overwrite"
             )
+        existing_radius_filter = bool(existing.get("radius_outlier_filter", False))
+        if existing_radius_filter != args.radius_outlier_filter:
+            raise ValueError(
+                "Cannot resume results captured with a different radius-filter "
+                "setting; choose another --output-dir or use --overwrite"
+            )
         results = existing.get("results", [])
         if not isinstance(results, list):
             raise ValueError(f"Invalid results list in {result_path}")
@@ -256,6 +289,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result.get("points_generated_mean", 0.0),
             )
             result.setdefault("after_noise_retained_percent", 100.0)
+            result.setdefault("radius_outlier_filter", False)
+            result.setdefault("points_before_radius_mean", result.get("points_mean", 0.0))
+            result.setdefault("radius_outlier_retained_percent", 100.0)
     completed_names = {result["name"] for result in results}
     result_indices = {result["name"]: index for index, result in enumerate(results)}
     saved_rgb: set[str] = set()
@@ -346,7 +382,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"noise {int(result['points_after_noise_mean'])} -> "
             f"bbox {int(result['points_after_bbox_mean'])} -> "
             f"table {int(result['points_after_table_mean'])} -> "
-            f"output {int(result['points_mean'])}",
+            f"sample {int(result['points_before_radius_mean'])} -> "
+            f"radius {int(result['points_mean'])}",
             flush=True,
         )
         if args.case_delay > 0.0:
